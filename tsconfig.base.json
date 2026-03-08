@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "types": ["node"],
+    "paths": {
+      "@llmscope/cli": ["apps/cli/src/index.ts"],
+      "@llmscope/web": ["apps/web/src/index.ts"],
+      "@llmscope/config": ["packages/config/src/index.ts"],
+      "@llmscope/core": ["packages/core/src/index.ts"],
+      "@llmscope/proxy-engine": ["packages/proxy-engine/src/index.ts"],
+      "@llmscope/shared-types": ["packages/shared-types/src/index.ts"],
+      "@llmscope/storage-memory": ["packages/storage-memory/src/index.ts"]
+    }
+  }
+}
