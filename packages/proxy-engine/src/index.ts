@@ -4,6 +4,11 @@ import type { TLSSocket } from 'node:tls';
 
 import type {
   IncomingRequestMeta,
+  MatchContext,
+  ParsedRequestResult,
+  ParsedResponseResult,
+  ParsedStreamEventResult,
+  ProviderPlugin,
   ProxyEngine,
   ResolvedRoute,
   RouteResolver,
@@ -12,11 +17,14 @@ import type {
 import { request as undiciRequest } from 'undici';
 
 import type {
+  CanonicalExchange,
   CanonicalStreamEvent,
   InspectorError,
   RawHttpMessage,
   Session,
 } from '@llmscope/shared-types';
+
+export { openAiChatCompletionsPlugin } from './providers/index.js';
 
 export interface ProxyEngineOptions {
   host?: string;
@@ -27,6 +35,7 @@ export interface ProxyEngineOptions {
   captureBodyBytes?: number;
   routeResolver: RouteResolver;
   store: SessionStore;
+  providerPlugins?: ProviderPlugin[];
 }
 
 export interface ProxyEngineAddress {
@@ -37,6 +46,19 @@ export interface ProxyEngineAddress {
 interface SseMessage {
   event?: string;
   data: string[];
+}
+
+interface MatchedProvider {
+  plugin: ProviderPlugin;
+  provider: string;
+  apiStyle: string;
+  confidence: number;
+}
+
+interface StreamEventParseContext {
+  request: IncomingRequestMeta;
+  sessionId: string;
+  sequence: number;
 }
 
 const TEXT_CONTENT_TYPES = ['application/json', 'application/problem+json', 'text/', 'application/xml'];
@@ -166,6 +188,184 @@ const captureBody = (
   return result;
 };
 
+const mergeWarnings = (existing: string[] | undefined, warnings: string[] | undefined): string[] | undefined => {
+  if (warnings === undefined || warnings.length === 0) {
+    return existing;
+  }
+
+  return [...(existing ?? []), ...warnings];
+};
+
+const mergeExchange = (
+  existing: CanonicalExchange | undefined,
+  incoming: Partial<CanonicalExchange> | undefined,
+): CanonicalExchange | undefined => {
+  if (incoming === undefined) {
+    return existing;
+  }
+
+  const next: Partial<CanonicalExchange> = {
+    ...existing,
+    ...incoming,
+  };
+  const mergedWarnings = mergeWarnings(existing?.warnings, incoming.warnings);
+
+  if (mergedWarnings !== undefined) {
+    next.warnings = mergedWarnings;
+  }
+
+  if (existing?.output !== undefined || incoming.output !== undefined) {
+    next.output = {
+      ...existing?.output,
+      ...incoming.output,
+    };
+  }
+
+  if (existing?.usage !== undefined || incoming.usage !== undefined) {
+    next.usage = {
+      ...existing?.usage,
+      ...incoming.usage,
+    };
+  }
+
+  if (existing?.latency !== undefined || incoming.latency !== undefined) {
+    next.latency = {
+      ...existing?.latency,
+      ...incoming.latency,
+    };
+  }
+
+  return next as CanonicalExchange;
+};
+
+const assignNormalized = (session: Session, exchange: CanonicalExchange | undefined): void => {
+  if (exchange === undefined) {
+    delete session.normalized;
+    return;
+  }
+
+  session.normalized = exchange;
+};
+
+const assignWarnings = (session: Session, warnings: string[] | undefined): void => {
+  if (warnings === undefined) {
+    delete session.warnings;
+    return;
+  }
+
+  session.warnings = warnings;
+};
+
+const applyRequestParsing = (
+  session: Session,
+  result: ParsedRequestResult,
+  fallback: { provider: string; apiStyle: string },
+): void => {
+  assignNormalized(
+    session,
+    mergeExchange(session.normalized, {
+      provider: fallback.provider,
+      apiStyle: fallback.apiStyle,
+      ...result.exchange,
+    }),
+  );
+  assignWarnings(session, mergeWarnings(session.warnings, result.warnings));
+};
+
+const applyResponseParsing = (session: Session, result: ParsedResponseResult): void => {
+  assignNormalized(session, mergeExchange(session.normalized, result.exchange));
+  assignWarnings(session, mergeWarnings(session.warnings, result.warnings));
+
+  if (result.error !== undefined) {
+    session.error = result.error;
+  }
+};
+
+const parseJsonIfPossible = (dataText: string): unknown => {
+  if (dataText.length === 0 || dataText === '[DONE]') {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(dataText) as unknown;
+  } catch {
+    return undefined;
+  }
+};
+
+const toGenericStreamEvent = (sessionId: string, message: SseMessage): CanonicalStreamEvent => {
+  const dataText = message.data.join('\n');
+  const normalized = dataText === '[DONE]' ? { done: true } : undefined;
+
+  return {
+    id: randomUUID(),
+    sessionId,
+    ts: Date.now(),
+    eventType: dataText === '[DONE]' ? 'message_stop' : 'unknown',
+    rawLine: dataText,
+    rawJson: parseJsonIfPossible(dataText),
+    normalized,
+  };
+};
+
+const toStreamEvent = (
+  message: SseMessage,
+  context: StreamEventParseContext,
+  matchedProvider?: MatchedProvider,
+): ParsedStreamEventResult => {
+  const dataText = message.data.join('\n');
+  const rawJson = parseJsonIfPossible(dataText);
+
+  if (matchedProvider?.plugin.parseStreamEvent !== undefined) {
+    const parsed = matchedProvider.plugin.parseStreamEvent({
+      request: context.request,
+      sessionId: context.sessionId,
+      eventId: randomUUID(),
+      sequence: context.sequence,
+      rawLine: dataText,
+      rawJson,
+    });
+
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+
+  return {
+    event: toGenericStreamEvent(context.sessionId, message),
+  };
+};
+
+const selectProviderPlugin = (
+  plugins: ProviderPlugin[],
+  matchContext: MatchContext,
+): MatchedProvider | undefined => {
+  let bestMatch: MatchedProvider | undefined;
+
+  for (const plugin of plugins) {
+    const result = plugin.match(matchContext);
+
+    if (result === null) {
+      continue;
+    }
+
+    if (
+      bestMatch === undefined ||
+      result.confidence > bestMatch.confidence ||
+      (result.confidence === bestMatch.confidence && plugin.id < bestMatch.plugin.id)
+    ) {
+      bestMatch = {
+        plugin,
+        provider: result.provider,
+        apiStyle: result.apiStyle,
+        confidence: result.confidence,
+      };
+    }
+  }
+
+  return bestMatch;
+};
+
 class SseAccumulator {
   private buffer = '';
 
@@ -219,33 +419,6 @@ class SseAccumulator {
     return message.data.length === 0 && message.event === undefined ? null : message;
   }
 }
-
-const toStreamEvent = (
-  sessionId: string,
-  message: SseMessage,
-): CanonicalStreamEvent => {
-  const dataText = message.data.join('\n');
-  const normalized = dataText === '[DONE]' ? { done: true } : undefined;
-  let rawJson: unknown;
-
-  if (dataText.length > 0 && dataText !== '[DONE]') {
-    try {
-      rawJson = JSON.parse(dataText) as unknown;
-    } catch {
-      rawJson = undefined;
-    }
-  }
-
-  return {
-    id: randomUUID(),
-    sessionId,
-    ts: Date.now(),
-    eventType: dataText === '[DONE]' ? 'message_stop' : 'unknown',
-    rawLine: dataText,
-    rawJson,
-    normalized,
-  };
-};
 
 const writeHeaders = (
   response: ServerResponse,
@@ -306,6 +479,8 @@ export class NodeProxyEngine implements ProxyEngine {
 
   private readonly store: SessionStore;
 
+  private readonly providerPlugins: ProviderPlugin[];
+
   private server: Server | null = null;
 
   private activeSessions = 0;
@@ -320,6 +495,7 @@ export class NodeProxyEngine implements ProxyEngine {
     this.captureBodyBytes = options.captureBodyBytes ?? DEFAULT_CAPTURE_BODY_BYTES;
     this.routeResolver = options.routeResolver;
     this.store = options.store;
+    this.providerPlugins = options.providerPlugins ?? [];
   }
 
   public async start(): Promise<void> {
@@ -430,11 +606,38 @@ export class NodeProxyEngine implements ProxyEngine {
         ...captureBody(requestBodyBuffer, requestMeta.contentType, this.captureBodyBytes),
       };
 
+      const matchedProvider = selectProviderPlugin(this.providerPlugins, {
+        request: requestMeta,
+        requestBody: session.request.bodyJson,
+      });
+
+      if (matchedProvider !== undefined) {
+        session.routing = {
+          ...session.routing,
+          matchedProvider: matchedProvider.provider,
+          matchedEndpoint: matchedProvider.apiStyle,
+          confidence: matchedProvider.confidence,
+        };
+
+        applyRequestParsing(
+          session,
+          matchedProvider.plugin.parseRequest({
+            request: requestMeta,
+            rawRequest: session.request,
+          }),
+          {
+            provider: matchedProvider.provider,
+            apiStyle: matchedProvider.apiStyle,
+          },
+        );
+      }
+
       await this.store.saveSession(session);
       this.emitSession(session);
 
       const resolvedRoute = this.routeResolver.resolve(requestMeta);
       session.routing = {
+        ...session.routing,
         routeId: resolvedRoute.routeId,
         upstreamBaseUrl: resolvedRoute.targetBaseUrl,
       };
@@ -495,6 +698,7 @@ export class NodeProxyEngine implements ProxyEngine {
 
       const responseChunks: Uint8Array[] = [];
       const sseAccumulator = new SseAccumulator();
+      let streamSequence = 0;
 
       for await (const chunk of upstream.body) {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -503,9 +707,26 @@ export class NodeProxyEngine implements ProxyEngine {
 
         if (isSse) {
           for (const message of sseAccumulator.push(buffer)) {
-            const event = toStreamEvent(sessionId, message);
-            session.streamEvents = [...(session.streamEvents ?? []), event];
-            await this.store.appendStreamEvent(sessionId, event);
+            const parsedEvent = toStreamEvent(
+              message,
+              {
+                request: requestMeta,
+                sessionId,
+                sequence: streamSequence,
+              },
+              matchedProvider,
+            );
+            streamSequence += 1;
+            session.streamEvents = [...(session.streamEvents ?? []), parsedEvent.event];
+            assignWarnings(session, mergeWarnings(session.warnings, parsedEvent.warnings));
+            assignNormalized(
+              session,
+              mergeExchange(
+                session.normalized,
+                parsedEvent.warnings === undefined ? undefined : { warnings: parsedEvent.warnings },
+              ),
+            );
+            await this.store.appendStreamEvent(sessionId, parsedEvent.event);
           }
         }
       }
@@ -521,6 +742,18 @@ export class NodeProxyEngine implements ProxyEngine {
       session.status = 'completed';
       session.endedAt = endedAt.toISOString();
       session.transport.durationMs = endedAt.getTime() - startedAt.getTime();
+
+      if (matchedProvider !== undefined && session.response !== undefined) {
+        applyResponseParsing(
+          session,
+          matchedProvider.plugin.parseResponse({
+            request: requestMeta,
+            rawRequest: session.request,
+            rawResponse: session.response,
+            statusCode: upstream.statusCode,
+          }),
+        );
+      }
 
       await this.store.updateSession(session);
       this.emitSession(session);
