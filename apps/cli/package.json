@@ -14,8 +14,14 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "pnpm exec vitest run --config ../../vitest.config.ts",
     "lint": "eslint src"
+  },
+  "dependencies": {
+    "@llmscope/config": "workspace:*",
+    "@llmscope/proxy-engine": "workspace:*",
+    "@llmscope/shared-types": "workspace:*",
+    "@llmscope/storage-memory": "workspace:*"
   }
 }
 
