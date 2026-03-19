@@ -3,16 +3,19 @@ import process from 'node:process';
 import { URL } from 'node:url';
 
 import type { SessionStore } from '@llmscope/core';
-import { defaultConfig, type RouteConfig } from '@llmscope/config';
-import { NodeProxyEngine, StaticRouteResolver, openAiChatCompletionsPlugin } from '@llmscope/proxy-engine';
+import { defaultConfig, type ResolvedPrivacyConfig, type RouteConfig } from '@llmscope/config';
+import { NodeProxyEngine, StaticRouteResolver, anthropicMessagesPlugin, openAiChatCompletionsPlugin, openAiResponsesPlugin } from '@llmscope/proxy-engine';
 import type { ListSessionsQuery, Session, SessionStatus } from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
+import { SqliteSessionStore } from '@llmscope/storage-sqlite';
 
 export interface CliRuntimeOptions {
   upstreamUrl: string;
   host?: string;
   port?: number;
   maxSessions?: number;
+  privacy?: ResolvedPrivacyConfig;
+  observationPort?: number;
 }
 
 export interface CliRuntime {
@@ -267,6 +270,10 @@ const createObservationServer = (
     corsOrigin: string;
   },
 ): ObservationServer => {
+  const address = {
+    host: options.host,
+    port: options.port,
+  };
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
       response.setHeader('access-control-allow-origin', options.corsOrigin);
@@ -353,6 +360,15 @@ const createObservationServer = (
         };
         const onListening = () => {
           server.off('error', onError);
+          const listeningAddress = server.address();
+
+          if (listeningAddress === null || typeof listeningAddress === 'string') {
+            reject(new Error('Observation server address unavailable.'));
+            return;
+          }
+
+          address.host = listeningAddress.address;
+          address.port = listeningAddress.port;
           resolve();
         };
 
@@ -380,43 +396,45 @@ const createObservationServer = (
       started = false;
     },
     getAddress(): { host: string; port: number } {
-      const address = server.address();
-
-      if (address === null || typeof address === 'string') {
-        return {
-          host: options.host,
-          port: options.port,
-        };
-      }
-
-      return {
-        host: address.address,
-        port: address.port,
-      };
+      return { ...address };
     },
   };
+};
+
+const createSessionStore = (options: CliRuntimeOptions): SessionStore => {
+  const resolvedMaxSessions = options.maxSessions ?? defaultConfig.storage.memory.maxSessions;
+
+  if (defaultConfig.storage.mode === 'sqlite') {
+    return new SqliteSessionStore({
+      filePath: defaultConfig.storage.sqlite.filePath,
+      maxSessions: resolvedMaxSessions,
+    });
+  }
+
+  return new MemorySessionStore({
+    maxSessions: resolvedMaxSessions,
+  });
 };
 
 export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
   const resolvedHost = options.host ?? defaultConfig.proxy.host;
   const resolvedPort = options.port ?? defaultConfig.proxy.port;
-  const resolvedMaxSessions = options.maxSessions ?? defaultConfig.storage.memory.maxSessions;
   const route = toRouteConfig(options.upstreamUrl);
-  const store = new MemorySessionStore({
-    maxSessions: resolvedMaxSessions,
-  });
+  const store = createSessionStore(options);
+  const privacy = options.privacy ?? defaultConfig.privacy;
   const engine = new NodeProxyEngine({
     host: resolvedHost,
     port: resolvedPort,
     mode: defaultConfig.proxy.mode,
     routeResolver: new StaticRouteResolver(toResolvedRoute(route)),
     store,
-    providerPlugins: [openAiChatCompletionsPlugin],
+    privacy,
+    providerPlugins: [openAiChatCompletionsPlugin, openAiResponsesPlugin, anthropicMessagesPlugin],
   });
   const observationServer = defaultConfig.ui.enabled
     ? createObservationServer(store, {
         host: resolvedHost,
-        port: defaultConfig.ui.port,
+        port: options.observationPort ?? defaultConfig.ui.port,
         corsOrigin: defaultConfig.ui.corsOrigin,
       })
     : null;

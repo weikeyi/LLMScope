@@ -157,14 +157,107 @@ describe('@llmscope/cli observation api', () => {
     }
   });
 
-  it('exposes stream events in session detail and reports API errors', async () => {
+  it('reports OpenAI responses sessions in observation detail', async () => {
+    const upstream = createServer(
+      async (request: IncomingMessage, response: ServerResponse) => {
+        const body = await readBody(request);
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            model: 'gpt-4.1-mini',
+            status: 'completed',
+            output: [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'Hello back' }],
+              },
+            ],
+            usage: {
+              input_tokens: 6,
+              output_tokens: 4,
+              total_tokens: 10,
+            },
+            body: JSON.parse(body),
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4.1-mini',
+          input: 'hi',
+          instructions: 'Be concise.',
+        }),
+      });
+      const proxyJson = (await proxyResponse.json()) as { body?: { model: string } };
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{ id: string; provider?: string; path: string }>;
+      const detailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
+      );
+      const detail = (await detailResponse.json()) as Session;
+
+      expect(proxyResponse.status).toBe(200);
+      expect(proxyJson.body).toBeDefined();
+      expect(proxyJson.body?.model).toBe('gpt-4.1-mini');
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        path: '/v1/responses',
+        provider: 'openai',
+      });
+      expect(detail.normalized).toMatchObject({
+        provider: 'openai',
+        apiStyle: 'responses',
+        model: 'gpt-4.1-mini',
+      });
+      expect(detail.request.bodyJson).toEqual({
+        model: 'gpt-4.1-mini',
+        input: 'hi',
+        instructions: 'Be concise.',
+      });
+      expect(detail.response?.bodyJson).toMatchObject({ status: 'completed' });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('exposes provider-normalized stream events in session detail and reports API errors', async () => {
     const upstream = createServer(
       (_request: IncomingMessage, response: ServerResponse) => {
         response.statusCode = 200;
         response.setHeader('content-type', 'text/event-stream');
+        response.write('event: response.created\n');
+        response.write('data: {"type":"response.created","response":{"status":"in_progress"}}\n\n');
         response.write('event: response.output_text.delta\n');
-        response.write('data: {"delta":"Hello"}\n\n');
-        response.write('data: [DONE]\n\n');
+        response.write('data: {"type":"response.output_text.delta","delta":"Hello"}\n\n');
+        response.write('event: response.completed\n');
+        response.write('data: {"type":"response.completed","response":{"status":"completed"}}\n\n');
         response.end();
       },
     );
@@ -185,12 +278,20 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const streamResponse = await fetch(
-        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
-      );
+      const streamResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4.1-mini',
+          stream: true,
+          input: 'hi',
+        }),
+      });
       const streamBody = await streamResponse.text();
       const sessionsResponse = await fetch(
-        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
       );
       const sessions = (await sessionsResponse.json()) as Array<{ id: string }>;
       const detailResponse = await fetch(
@@ -216,8 +317,21 @@ describe('@llmscope/cli observation api', () => {
       );
 
       expect(streamResponse.status).toBe(200);
-      expect(streamBody).toContain('data: {"delta":"Hello"}');
-      expect(detail.streamEvents?.map((event) => event.eventType)).toEqual(['unknown', 'message_stop']);
+      expect(streamBody).toContain('response.output_text.delta');
+      expect(detail.normalized).toMatchObject({
+        provider: 'openai',
+        apiStyle: 'responses',
+        model: 'gpt-4.1-mini',
+        stream: true,
+      });
+      expect(detail.streamEvents?.map((event) => event.eventType)).toEqual([
+        'message_start',
+        'delta',
+        'message_stop',
+      ]);
+      expect(detail.streamEvents?.[0]?.normalized).toEqual({ status: 'in_progress' });
+      expect(detail.streamEvents?.[1]?.normalized).toEqual({ text: 'Hello' });
+      expect(detail.streamEvents?.[2]?.normalized).toEqual({ done: true, status: 'completed' });
       expect(missingResponse.status).toBe(404);
       expect(await missingResponse.json()).toEqual({ error: 'Not found.' });
       expect(invalidLimitResponse.status).toBe(400);
@@ -238,6 +352,220 @@ describe('@llmscope/cli observation api', () => {
     }
   });
 
+  it('reports Anthropic messages sessions in observation detail', async () => {
+    const upstream = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            id: 'msg_123',
+            model: 'claude-3-5-sonnet',
+            stop_reason: 'end_turn',
+            content: [{ type: 'text', text: 'Hello back' }],
+            usage: {
+              input_tokens: 11,
+              output_tokens: 7,
+            },
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/messages`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-3-5-sonnet',
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 256,
+        }),
+      });
+      await proxyResponse.json();
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fmessages`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{ id: string; provider?: string; path: string }>;
+      const detailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
+      );
+      const detail = (await detailResponse.json()) as Session;
+
+      expect(proxyResponse.status).toBe(200);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        path: '/v1/messages',
+        provider: 'anthropic',
+      });
+      expect(detail.normalized).toMatchObject({
+        provider: 'anthropic',
+        apiStyle: 'messages',
+        model: 'claude-3-5-sonnet',
+        maxTokens: 256,
+      });
+      expect(detail.request.bodyJson).toEqual({
+        model: 'claude-3-5-sonnet',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 256,
+      });
+      expect(detail.response?.bodyJson).toMatchObject({ stop_reason: 'end_turn' });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('returns redacted session detail when strict privacy mode is enabled', async () => {
+    const upstream = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.setHeader('set-cookie', 'session=secret');
+        response.end(
+          JSON.stringify({
+            model: 'gpt-4.1-mini',
+            status: 'completed',
+            output: [
+              {
+                type: 'message',
+                role: 'assistant',
+                content: [{ type: 'output_text', text: 'private reply' }],
+              },
+            ],
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      privacy: { mode: 'strict' },
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer top-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4.1-mini',
+          input: 'private prompt',
+          instructions: 'keep this secret',
+        }),
+      });
+      await proxyResponse.json();
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{ id: string }>;
+      const detailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
+      );
+      const detail = (await detailResponse.json()) as Session;
+
+      expect(detail.request.headers.authorization).toBe('[redacted]');
+      expect(detail.request.bodyJson).toMatchObject({
+        input: '[redacted]',
+        instructions: '[redacted]',
+      });
+      expect(detail.normalized).toMatchObject({
+        inputMessages: [{ parts: [{ text: '[redacted]' }] }],
+        instructions: [{ parts: [{ text: '[redacted]' }] }],
+      });
+      expect(detail.response?.headers['set-cookie']).toBe('[redacted]');
+      expect(detail.warnings?.some((warning) => warning.includes('Redacted'))).toBe(true);
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('preserves raw session detail when privacy mode is off', async () => {
+    const upstream = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      privacy: { mode: 'off' },
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer top-secret',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4.1-mini',
+          input: 'private prompt',
+        }),
+      });
+      await proxyResponse.json();
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{ id: string }>;
+      const detailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
+      );
+      const detail = (await detailResponse.json()) as Session;
+
+      expect(detail.request.headers.authorization).toBe('Bearer top-secret');
+      expect(detail.request.bodyJson).toMatchObject({ input: 'private prompt' });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
   it('stops the proxy if observation server startup fails', async () => {
     const upstream = createServer(
       async (_request: IncomingMessage, response: ServerResponse) => {
@@ -251,20 +579,28 @@ describe('@llmscope/cli observation api', () => {
       response.statusCode = 200;
       response.end('blocked');
     });
-    blockingServer.listen(8788, '127.0.0.1');
-    await once(blockingServer, 'listening');
+    const blockingServerAddress = await listen(blockingServer);
 
     const runtime = createCliRuntime({
       upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
       host: '127.0.0.1',
       port: 0,
       maxSessions: 10,
+      observationPort: blockingServerAddress.port,
     });
-    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
 
     try {
       await expect(runtime.start()).rejects.toThrow();
-      await expect(fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`)).rejects.toThrow();
+      expect(runtime.getObservationAddress()).toEqual(observationAddress);
+      await blockingServerAddress.close();
+      await runtime.start();
+      const proxyAddress = runtime.getProxyAddress();
+      await expect(fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`)).resolves.toBeDefined();
     } finally {
       await new Promise<void>((resolve, reject) => {
         blockingServer.close((error) => {
@@ -275,7 +611,8 @@ describe('@llmscope/cli observation api', () => {
 
           resolve();
         });
-      });
+      }).catch(() => undefined);
+      await runtime.stop();
       await upstreamAddress.close();
     }
   });

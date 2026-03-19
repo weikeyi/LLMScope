@@ -13,6 +13,7 @@ export default defineConfig({
       '@llmscope/proxy-engine': fileURLToPath(new URL('./packages/proxy-engine/src/index.ts', import.meta.url)),
       '@llmscope/shared-types': fileURLToPath(new URL('./packages/shared-types/src/index.ts', import.meta.url)),
       '@llmscope/storage-memory': fileURLToPath(new URL('./packages/storage-memory/src/index.ts', import.meta.url)),
+      '@llmscope/storage-sqlite': fileURLToPath(new URL('./packages/storage-sqlite/src/index.ts', import.meta.url)),
     },
   },
   test: {

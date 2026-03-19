@@ -27,7 +27,8 @@
       "@llmscope/core": ["packages/core/src/index.ts"],
       "@llmscope/proxy-engine": ["packages/proxy-engine/src/index.ts"],
       "@llmscope/shared-types": ["packages/shared-types/src/index.ts"],
-      "@llmscope/storage-memory": ["packages/storage-memory/src/index.ts"]
+      "@llmscope/storage-memory": ["packages/storage-memory/src/index.ts"],
+      "@llmscope/storage-sqlite": ["packages/storage-sqlite/src/index.ts"]
     }
   }
 }

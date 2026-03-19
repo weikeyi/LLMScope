@@ -1,5 +1,5 @@
 {
-  "name": "@llmscope/cli",
+  "name": "@llmscope/storage-sqlite",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,15 +14,15 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "test": "pnpm exec vitest run --config ../../vitest.config.ts",
-    "lint": "eslint src"
+    "test": "vitest run",
+    "lint": "eslint src tests"
   },
   "dependencies": {
-    "@llmscope/config": "workspace:*",
-    "@llmscope/proxy-engine": "workspace:*",
+    "@llmscope/core": "workspace:*",
     "@llmscope/shared-types": "workspace:*",
-    "@llmscope/storage-memory": "workspace:*",
-    "@llmscope/storage-sqlite": "workspace:*"
+    "better-sqlite3": "^12.8.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
   }
 }
-

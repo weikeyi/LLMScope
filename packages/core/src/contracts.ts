@@ -61,6 +61,7 @@ export interface ParseStreamEventContext {
   sessionId: string;
   eventId: string;
   sequence: number;
+  eventName?: string;
   rawLine?: string;
   rawJson?: unknown;
 }

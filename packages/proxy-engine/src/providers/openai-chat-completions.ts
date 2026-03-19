@@ -6,7 +6,7 @@ import type {
   CanonicalUsage,
 } from '@llmscope/shared-types';
 
-const isRecord = (value: unknown): value is Record<string, unknown> => {
+export const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
 
@@ -25,7 +25,7 @@ const toImageUrlPart = (part: Record<string, unknown>): CanonicalPart => {
   };
 };
 
-const toTextPart = (value: unknown): CanonicalPart[] => {
+export const toTextParts = (value: unknown): CanonicalPart[] => {
   if (typeof value === 'string') {
     return [{ type: 'text', text: value }];
   }
@@ -39,7 +39,7 @@ const toTextPart = (value: unknown): CanonicalPart[] => {
       return { type: 'unknown', value: part } satisfies CanonicalPart;
     }
 
-    if (part.type === 'text' && typeof part.text === 'string') {
+    if ((part.type === 'text' || part.type === 'input_text' || part.type === 'output_text') && typeof part.text === 'string') {
       return { type: 'text', text: part.text } satisfies CanonicalPart;
     }
 
@@ -51,7 +51,7 @@ const toTextPart = (value: unknown): CanonicalPart[] => {
   });
 };
 
-const toCanonicalMessage = (value: unknown): CanonicalMessage => {
+export const toCanonicalMessage = (value: unknown): CanonicalMessage => {
   if (!isRecord(value)) {
     return {
       role: 'unknown',
@@ -71,12 +71,12 @@ const toCanonicalMessage = (value: unknown): CanonicalMessage => {
 
   return {
     role,
-    parts: toTextPart(value.content),
+    parts: toTextParts(value.content),
     raw: value,
   };
 };
 
-const toCanonicalTool = (value: unknown): CanonicalTool => {
+export const toCanonicalTool = (value: unknown): CanonicalTool => {
   if (!isRecord(value)) {
     return { raw: value };
   }
@@ -101,7 +101,7 @@ const toCanonicalTool = (value: unknown): CanonicalTool => {
   return tool;
 };
 
-const toToolCallPart = (toolCall: Record<string, unknown>): CanonicalPart => {
+export const toToolCallPart = (toolCall: Record<string, unknown>): CanonicalPart => {
   const part: Extract<CanonicalPart, { type: 'tool_call' }> = {
     type: 'tool_call',
   };
@@ -125,12 +125,12 @@ const toToolCallPart = (toolCall: Record<string, unknown>): CanonicalPart => {
   return part;
 };
 
-const collectOutputMessages = (message: Record<string, unknown>): CanonicalMessage[] => {
+export const collectChatCompletionOutputMessages = (message: Record<string, unknown>): CanonicalMessage[] => {
   const content = Array.isArray(message.content) ? message.content : [];
   const textParts = content
     .filter(isRecord)
     .map((part) => {
-      if (part.type === 'text' && typeof part.text === 'string') {
+      if ((part.type === 'text' || part.type === 'output_text') && typeof part.text === 'string') {
         return { type: 'text', text: part.text } satisfies CanonicalPart;
       }
 
@@ -142,7 +142,7 @@ const collectOutputMessages = (message: Record<string, unknown>): CanonicalMessa
     : [];
 
   const parts = [
-    ...toTextPart(typeof message.content === 'string' ? message.content : undefined),
+    ...toTextParts(typeof message.content === 'string' ? message.content : undefined),
     ...textParts,
     ...toolCalls,
   ];
@@ -156,7 +156,7 @@ const collectOutputMessages = (message: Record<string, unknown>): CanonicalMessa
   ];
 };
 
-const toUsage = (value: unknown): CanonicalUsage | undefined => {
+export const toOpenAiUsage = (value: unknown): CanonicalUsage | undefined => {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -169,6 +169,14 @@ const toUsage = (value: unknown): CanonicalUsage | undefined => {
 
   if (typeof value.completion_tokens === 'number') {
     usage.outputTokens = value.completion_tokens;
+  }
+
+  if (typeof value.reasoning_tokens === 'number') {
+    usage.reasoningTokens = value.reasoning_tokens;
+  }
+
+  if (isRecord(value.output_tokens_details) && typeof value.output_tokens_details.reasoning_tokens === 'number') {
+    usage.reasoningTokens = value.output_tokens_details.reasoning_tokens;
   }
 
   if (typeof value.total_tokens === 'number') {
@@ -245,7 +253,7 @@ const toResponseOutput = (
     finishReason?: string;
     raw: Record<string, unknown>;
   } = {
-    messages: collectOutputMessages(message),
+    messages: collectChatCompletionOutputMessages(message),
     raw: body,
   };
 
@@ -265,7 +273,7 @@ const toResponseExchange = (body: Record<string, unknown>) => {
   const firstChoice = choices[0];
   const message = isRecord(firstChoice?.message) ? firstChoice.message : undefined;
   const finishReason = typeof firstChoice?.finish_reason === 'string' ? firstChoice.finish_reason : undefined;
-  const usage = toUsage(body.usage);
+  const usage = toOpenAiUsage(body.usage);
   const exchange: {
     provider: 'openai';
     apiStyle: 'chat.completions';
@@ -298,15 +306,31 @@ const toResponseExchange = (body: Record<string, unknown>) => {
   return exchange;
 };
 
-const createStreamEventBase = (
+export const createStreamEventBase = (
   ctx: { eventId: string; sessionId: string; rawLine?: string },
-  eventType: 'message_stop' | 'delta' | 'unknown',
+  eventType:
+    | 'message_start'
+    | 'delta'
+    | 'tool_call_start'
+    | 'tool_call_delta'
+    | 'message_stop'
+    | 'usage'
+    | 'error'
+    | 'unknown',
 ) => {
   const event: {
     id: string;
     sessionId: string;
     ts: number;
-    eventType: 'message_stop' | 'delta' | 'unknown';
+    eventType:
+      | 'message_start'
+      | 'delta'
+      | 'tool_call_start'
+      | 'tool_call_delta'
+      | 'message_stop'
+      | 'usage'
+      | 'error'
+      | 'unknown';
     rawLine?: string;
   } = {
     id: ctx.eventId,
@@ -322,12 +346,20 @@ const createStreamEventBase = (
   return event;
 };
 
-const toStreamEvent = (
+export const toParsedStreamEvent = (
   event: {
     id: string;
     sessionId: string;
     ts: number;
-    eventType: 'message_stop' | 'delta' | 'unknown';
+    eventType:
+      | 'message_start'
+      | 'delta'
+      | 'tool_call_start'
+      | 'tool_call_delta'
+      | 'message_stop'
+      | 'usage'
+      | 'error'
+      | 'unknown';
     rawLine?: string;
     rawJson?: unknown;
     normalized?: unknown;
@@ -338,7 +370,15 @@ const toStreamEvent = (
     id: string;
     sessionId: string;
     ts: number;
-    eventType: 'message_stop' | 'delta' | 'unknown';
+    eventType:
+      | 'message_start'
+      | 'delta'
+      | 'tool_call_start'
+      | 'tool_call_delta'
+      | 'message_stop'
+      | 'usage'
+      | 'error'
+      | 'unknown';
     rawLine?: string;
     rawJson?: unknown;
     normalized?: unknown;
@@ -425,7 +465,7 @@ export const openAiChatCompletionsPlugin: ProviderPlugin = {
   },
   parseStreamEvent(ctx) {
     if (ctx.rawLine === '[DONE]') {
-      return toStreamEvent({
+      return toParsedStreamEvent({
         ...createStreamEventBase(ctx, 'message_stop'),
         normalized: { done: true },
       });
@@ -440,7 +480,7 @@ export const openAiChatCompletionsPlugin: ProviderPlugin = {
     const delta = isRecord(firstChoice?.delta) ? firstChoice.delta : undefined;
 
     if (typeof delta?.content === 'string') {
-      return toStreamEvent({
+      return toParsedStreamEvent({
         ...createStreamEventBase(ctx, 'delta'),
         rawJson: ctx.rawJson,
         normalized: {
@@ -449,7 +489,7 @@ export const openAiChatCompletionsPlugin: ProviderPlugin = {
       });
     }
 
-    return toStreamEvent(
+    return toParsedStreamEvent(
       {
         ...createStreamEventBase(ctx, 'unknown'),
         rawJson: ctx.rawJson,
