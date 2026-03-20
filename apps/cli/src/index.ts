@@ -996,7 +996,44 @@ export const runCli = async (args: string[]): Promise<void> => {
   }
 
   if (command.kind === 'clear') {
-    throw new Error('Clear command not yet implemented.');
+    const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
+      overrides: {},
+    };
+
+    if (command.configFilePath !== undefined) {
+      resolveOptions.filePath = command.configFilePath;
+    }
+
+    const resolvedConfig = resolveConfig(resolveOptions);
+
+    const targetHost = command.target.host;
+    const targetPort = command.target.port;
+
+    const path =
+      command.sessionId === undefined
+        ? '/api/sessions?confirm=true'
+        : `/api/sessions/${encodeURIComponent(command.sessionId)}`;
+
+    const response = await fetch(`http://${targetHost}:${targetPort}${path}`, {
+      method: 'DELETE',
+    });
+
+    if (!response.ok && response.status !== 204) {
+      const body = (await response.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      throw new Error(
+        body?.error ??
+          `Observation API request failed with status ${response.status}.`,
+      );
+    }
+
+    console.log(
+      command.sessionId === undefined
+        ? 'Cleared all sessions.'
+        : `Cleared session ${command.sessionId}.`,
+    );
+    return;
   }
 
   const parsedArgs = command.args;

@@ -1002,4 +1002,152 @@ describe('@llmscope/cli observation api', () => {
       await upstreamAddress.close();
     }
   });
+
+  it('clear command deletes a single session through the observation api', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{
+        id: string;
+      }>;
+
+      expect(sessions).toHaveLength(1);
+      const session = sessions[0];
+      if (session === undefined) {
+        throw new Error('Expected at least one session.');
+      }
+      const sessionId = session.id;
+
+      const { runCli } = await import('../src/index.js');
+      await runCli([
+        'clear',
+        '--host',
+        observationAddress.host,
+        '--ui-port',
+        String(observationAddress.port),
+        '--session-id',
+        sessionId,
+      ]);
+
+      const deletedDetailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessionId}`,
+      );
+      expect(deletedDetailResponse.status).toBe(404);
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('clear command clears all sessions when no session id is provided', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'first' }],
+          }),
+        },
+      );
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'second' }],
+          }),
+        },
+      );
+
+      const { runCli } = await import('../src/index.js');
+      await runCli([
+        'clear',
+        '--host',
+        observationAddress.host,
+        '--ui-port',
+        String(observationAddress.port),
+      ]);
+
+      const sessionsAfterClearResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessionsAfterClear =
+        (await sessionsAfterClearResponse.json()) as Array<unknown>;
+      expect(sessionsAfterClear).toHaveLength(0);
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
 });
