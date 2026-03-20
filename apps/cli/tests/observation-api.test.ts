@@ -1150,4 +1150,17 @@ describe('@llmscope/cli observation api', () => {
       await upstreamAddress.close();
     }
   });
+
+  it('clear command shows help for --help', () => {
+    expect(() => parseCommand(['clear', '--help'])).toThrow(
+      'Usage: llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]',
+    );
+  });
+
+  it('clear command fails when observation api is unreachable', async () => {
+    const { runCli } = await import('../src/index.js');
+    await expect(
+      runCli(['clear', '--host', '127.0.0.1', '--ui-port', '1']),
+    ).rejects.toThrow();
+  });
 });
