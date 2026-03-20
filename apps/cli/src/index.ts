@@ -104,6 +104,7 @@ const generalUsage = [
   'Usage:',
   '  llmscope-cli start --upstream <url> [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
   '  llmscope-cli doctor [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
+  '  llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]',
   '',
 ].join('\n');
 
