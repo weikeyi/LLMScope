@@ -1,40 +1,49 @@
 # LLMScope 项目实现与进度跟踪
 
-> 最后更新：2026-03-08
-> 
+> 最后更新：2026-03-19
+>
 > 用途：作为当前仓库实现状态的快照文档，持续跟踪“已经做了什么、还缺什么、下一步做什么”。
 
 ## 1. 当前结论
 
-- 项目目前处于**基础骨架已搭好、核心链路已有原型、应用层尚未开始**的阶段。
-- 已有真实实现的重点在 `packages/shared-types`、`packages/core`、`packages/storage-memory`、`packages/proxy-engine`。
-- `apps/cli` 与 `apps/web` 仍然只是占位 scaffold，尚未进入可用产品形态。
-- `packages/config` 目前只有**配置类型与默认值**，还没有配置加载、校验、合并覆盖等完整能力。
+- 项目目前处于**后端最小可用链路已成型，已具备最小观察面，但距离完整产品仍有明显缺口**的阶段。
+- 已有真实实现的重点在 `packages/shared-types`、`packages/core`、`packages/storage-memory`、`packages/storage-sqlite`、`packages/proxy-engine`、`apps/cli`、`apps/web`。
+- `apps/cli` 已不再是占位 scaffold，已经可以启动本地代理服务，并同时暴露 observation API。
+- `apps/web` 也不再只是空壳，已经具备**只读 observation UI**：支持会话列表、筛选、详情、标准化结果和流事件展示。
+- `packages/config` 目前仍只有**配置类型与默认值**，还没有配置文件加载、环境变量覆盖、CLI 参数覆盖、运行时校验与完整 `ResolvedConfig` 组装链路。
+- Provider 识别、基础标准化解析、SSE 事件归一化、基础隐私脱敏都已经进入可运行状态，但相关能力仍内嵌在现有包内，尚未按最初架构拆分为独立包。
 
 ## 2. 校验快照
 
-以下命令已在 **2026-03-08** 本地执行通过：
+以下命令已在 **2026-03-19** 本地执行：
 
 - `pnpm test`
 - `pnpm typecheck`
 
+当前结论：
+
+- `pnpm test`：**通过**
+- `pnpm typecheck`：**通过**
+
 当前自动化校验覆盖情况：
 
-- 有测试的包：`packages/shared-types`、`packages/core`、`packages/storage-memory`、`packages/proxy-engine`
-- 当前通过测试数：**9**
-- `apps/cli`、`apps/web`、`packages/config` 目前没有实际测试用例
+- 有测试的模块：`packages/shared-types`、`packages/core`、`packages/storage-memory`、`packages/storage-sqlite`、`packages/proxy-engine`、`apps/cli`、`apps/web`
+- `packages/config` 目前仍是 `--passWithNoTests`
+- 当前测试重点已覆盖：Provider 匹配与标准化、代理引擎请求/响应/SSE、CLI observation API、Web observation UI、内存存储与 SQLite 存储
+- 当前测试基线：`pnpm test` 与 `pnpm typecheck` 均已通过，可作为后续开发基线
 
 ## 3. 当前实现清单
 
-| 模块 | 状态 | 当前实现 | 说明 |
-| --- | --- | --- | --- |
-| `packages/shared-types` | 已实现 | 统一领域模型、会话结构、流事件、错误模型、UI 推送事件 | 作为全项目的类型基线，适合继续复用和扩展 |
-| `packages/core` | 已实现（契约层） | Provider 插件接口、路由解析接口、存储接口、代理引擎接口 | 已有抽象，但仍缺事件总线与更高层编排实现 |
-| `packages/config` | 部分实现 | 配置类型定义、默认配置 `defaultConfig` | 缺 zod 校验、环境变量覆盖、配置文件加载、CLI 参数覆盖、resolved config 组装逻辑 |
-| `packages/storage-memory` | 已实现 | 内存 Session Store、增删改查、流事件追加、列表筛选、LRU 淘汰 | 已具备 Phase B 的基础能力 |
-| `packages/proxy-engine` | 部分实现（可运行原型） | Node HTTP 代理、静态路由、请求/响应捕获、Session 持久化、SSE 流事件累积 | 已打通基础链路，但仍缺 provider registry、独立 SSE 解析包、超时/并发配置等 |
-| `apps/cli` | 脚手架 | 仅导出 scaffold message | 尚未实现 `start`、`doctor`、`export`、`clear` 等命令 |
-| `apps/web` | 脚手架 | 仅导出 scaffold message | 尚未实现列表页、详情页、实时推送等功能 |
+| 模块                      | 状态                   | 当前实现                                                                                                                     | 说明                                                             |
+| ------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `packages/shared-types`   | 已实现                 | 统一领域模型、Session 结构、流事件、错误模型、标准化消息与输出结构                                                           | 作为全项目的类型基线，已被各层广泛复用                           |
+| `packages/core`           | 已实现（契约层）       | Provider 插件接口、路由解析接口、存储接口、代理引擎接口                                                                      | 契约边界清晰，适合继续承载拆包后的抽象能力                       |
+| `packages/config`         | 部分实现               | 配置类型定义、默认配置 `defaultConfig`、resolved 类型                                                                        | 缺配置文件加载、环境变量覆盖、CLI 参数覆盖、运行时校验、配置合并 |
+| `packages/storage-memory` | 已实现                 | 内存 Session Store、增删改查、流事件追加、列表筛选、LRU 淘汰                                                                 | 具备 MVP 运行所需能力                                            |
+| `packages/storage-sqlite` | 已实现                 | SQLite Session Store、会话持久化、流事件追加、筛选查询、LRU 淘汰                                                             | 已落地，不再只是规划项                                           |
+| `packages/proxy-engine`   | 已实现（MVP 核心）     | Node HTTP 代理、静态路由、请求/响应抓取、Session 持久化、SSE 透传与事件累积、Provider 匹配、请求/响应/流标准化、基础隐私脱敏 | 目前是项目最成熟的核心包                                         |
+| `apps/cli`                | 已实现（最小可用）     | CLI 参数解析、代理启动/停止、Session 摘要输出、observation API、启动失败回滚、优雅退出、`clear` 命令                         | 已经是当前主入口，不再是 scaffold                                |
+| `apps/web`                | 部分实现（只读观察面） | observation UI 数据加载、筛选参数归一化、会话列表、详情页、原始请求/响应展示、normalized exchange、stream events 展示        | 已可作为只读观察页，但还不是完整交互式 Web 应用                  |
 
 ## 4. 与路线图对照
 
@@ -52,7 +61,7 @@
 
 **部分完成**
 
-- [~] `packages/config`：仅完成类型与默认值，未完成校验与加载链路
+- [~] `packages/config`：仅完成类型、默认值与 resolved 类型，未完成加载、校验、覆盖链路
 
 **未完成**
 
@@ -62,14 +71,15 @@
 - [ ] LICENSE
 - [ ] 配置文件加载
 - [ ] 环境变量覆盖
-- [ ] CLI 参数覆盖
-- [ ] 输出完整 resolved config
+- [ ] CLI 参数覆盖到统一配置系统
+- [ ] 输出完整 resolved config 组装流程
 
 ### Phase B：核心管道
 
 **已完成**
 
 - [x] `packages/storage-memory`
+- [x] `packages/storage-sqlite`
 - [x] `saveSession` / `updateSession`
 - [x] `appendStreamEvent`
 - [x] `listSessions` / `getSession` / `deleteSession` / `clearAll`
@@ -79,38 +89,75 @@
 - [x] 请求/响应抓取与 Session 持久化
 - [x] JSON 请求链路测试
 - [x] SSE 响应透传与流事件落库测试
+- [x] 基于插件的 Provider 匹配
+- [x] OpenAI Chat Completions 标准化解析
+- [x] OpenAI Responses 标准化解析
+- [x] Anthropic Messages 标准化解析
 
 **部分完成**
 
-- [~] SSE 解析：当前能力内嵌在 `packages/proxy-engine`，但还没有独立的 `packages/parser-sse`
-- [~] 代理引擎：具备基础能力，但还没有超时、背压、最大并发等更完整控制项
+- [~] SSE 解析：当前能力内嵌在 `packages/proxy-engine`，还没有独立的 `packages/parser-sse`
+- [~] Provider registry：插件机制已存在，但还没有拆出独立 `packages/provider-registry`
+- [~] 代理引擎控制面：已具备基础能力，但还没有超时、背压、最大并发等更完整可配置项
 
 **未完成**
 
 - [ ] `packages/parser-sse`
 - [ ] `packages/provider-registry`
 - [ ] `packages/provider-generic`
-- [ ] 最高置信度 provider 匹配
-- [ ] 标准化 request / response / stream 解析
+- [ ] 更高层的 provider fallback / 最高置信度治理策略抽象
 - [ ] 超时处理配置化
 - [ ] 并发管理与背压控制
 
 ### Phase C：Provider 与安全
 
+**已完成**
+
+- [x] OpenAI Chat Completions provider plugin
+- [x] OpenAI Responses provider plugin
+- [x] Anthropic Messages provider plugin
+- [x] Provider 级测试矩阵（当前覆盖以上三类协议主路径）
+- [x] `strict` / `balanced` / `off` 隐私模式的基础行为模型
+- [x] strict 模式下对敏感 header、文本字段、图像 URL、流事件内容的基础脱敏
+
+**部分完成**
+
+- [~] 安全与脱敏能力当前内嵌在 `packages/proxy-engine`，还没有独立 `packages/redaction`
+- [~] Provider 覆盖还集中于 OpenAI / Anthropic 主路径，尚未扩展到 OpenAI-compatible 泛化生态
+
+**未完成**
+
 - [ ] `packages/provider-openai`
 - [ ] `packages/provider-anthropic`
 - [ ] `packages/redaction`
-- [ ] OpenAI / Anthropic 测试矩阵
-- [ ] strict / balanced / off 安全策略落地
+- [ ] `packages/provider-generic`
+- [ ] 更完整的 OpenAI-compatible / relay provider 识别策略
 
 ### Phase D：应用层
 
-- [ ] `apps/cli` 命令能力
-- [ ] `apps/web` 页面与状态管理
-- [ ] WebSocket 实时推送
-- [ ] 会话列表 / 详情页 / 筛选 / 空状态 / 错误状态
+**已完成**
+
+- [x] `apps/cli` 可启动代理服务
+- [x] `apps/cli` 输出实时 session 摘要
+- [x] `apps/cli` 暴露 `health` / `sessions` / `session detail` observation API
+- [x] `apps/web` 只读 observation UI
+- [x] 会话列表 / 详情页 / 筛选的最小只读形态
+
+**部分完成**
+
+- [~] `apps/cli` 目前只有最小启动路径，尚未实现 `export`、`doctor` 等命令（`clear` 命令已完成）
+- [~] `apps/web` 目前为服务端渲染 HTML 的只读观察页，尚未进入完整前端应用形态
+
+**未完成**
+
+- [ ] `apps/cli` 多命令能力
+- [ ] `apps/web` 完整页面与状态管理
+- [ ] WebSocket / SSE 实时推送到 UI
+- [ ] 更完整的空状态 / 错误状态 / 交互式刷新与导航
 
 ### Phase E：增强与发布
+
+**未完成**
 
 - [ ] `packages/replay`
 - [ ] Diff 能力
@@ -122,47 +169,52 @@
 
 按影响优先级排序，当前最值得优先补齐的是：
 
-1. **Provider 识别与标准化解析缺失**  
-   现在代理层能转发和记录数据，但还不能把请求稳定识别为 OpenAI / Anthropic / OpenAI-compatible，并统一抽取 model、messages、tools、usage、stream delta。
+1. **产品可用性仍未闭环**  
+   现在底层代理、捕获、标准化和观察 API 已经能工作，但配置系统不完整，CLI 还缺多命令能力，Web 也还只是最小只读观察页。
 
-2. **配置系统还不是可用状态**  
-   当前只有类型和默认值，用户还不能通过配置文件、环境变量或 CLI 参数驱动项目启动。
+2. **统一配置系统还不是可用状态**  
+   当前只有默认值和类型，用户还不能通过配置文件、环境变量或更系统化的 CLI 参数来驱动项目启动。
 
-3. **CLI / Web 应用层尚未承接底层能力**  
-   核心包已有一定基础，但用户还无法直接启动服务和浏览会话。
+3. **应用层仍缺真正的“可操作产品表面”**  
+   用户已经能看数据，但还不能方便地清理、导出、筛选增强、长期持久化管理或通过完整 Web 应用交互使用。
 
-4. **安全与脱敏未开始**  
-   在项目准备对外演示或开源前，header / body / query 的脱敏必须补齐。
+4. **架构拆分还没有完成**  
+   `provider-registry`、`parser-sse`、`redaction` 等能力虽然“事实上存在”，但还没有按最初设计独立成包，不利于后续扩展与维护。
 
 ## 6. 建议的下一阶段开发顺序
 
-建议按下面顺序推进，性价比最高：
+当前建议**优先推进“产品可用性”而不是“架构拆分”**。
 
-### 第一优先级
+原因：
 
-- 完成 `packages/provider-registry`
-- 抽离 `packages/parser-sse`
-- 实现 `packages/provider-generic`
-- 让代理链路输出基础 `normalized` 结果
+- 当前项目最缺的不是“能不能识别 OpenAI / Anthropic”，而是“用户能不能顺畅启动、查看、管理和后续扩展使用”
+- 现有架构虽然还没拆净，但已经足够支撑继续做 CLI / Web / 配置层
+- 如果过早投入大量时间拆 `provider-registry`、`parser-sse`、`redaction`，会提升内部整洁度，但对 MVP 可用性的提升有限
+- 当 CLI 配置链路、更多命令、Web 交互面稳定之后，再做拆包更容易看清真实边界，避免“为架构而架构”
 
-### 第二优先级
+### 第一优先级：产品可用性
 
-- 为 `packages/config` 增加 zod 校验
+- 为 `packages/config` 增加运行时校验
 - 支持配置文件加载
-- 支持环境变量与 CLI 参数覆盖
+- 支持环境变量覆盖
+- 支持 CLI 参数与配置合并
 - 产出统一的 `ResolvedConfig`
+- 为 `apps/cli` 增加更完整的命令面：`start`、`doctor`、`export`（`clear` 已完成）
+- 让 `apps/web` 从只读观察页继续演进到最小可用交互界面
 
-### 第三优先级
+### 第二优先级：应用层增强
 
-- 落地 `apps/cli` 的 `start` 命令
-- 启动代理引擎 + store + Web 服务
-- 让 `apps/web` 先做最小可用版本：会话列表 + 详情页
+- 增加会话刷新、筛选增强、选中状态同步
+- 增加导出能力
+- 视需要增加实时推送
+- 明确 SQLite 持久化作为默认可选运行模式
 
-### 第四优先级
+### 第三优先级：架构拆分
 
-- 增加 `packages/redaction`
-- 增加 provider 级测试矩阵
-- 再推进 replay、diff、导出、发布相关工作
+- 抽离 `packages/provider-registry`
+- 抽离 `packages/parser-sse`
+- 抽离 `packages/redaction`
+- 视实际收益决定是否拆分 `provider-openai`、`provider-anthropic`
 
 ## 7. 文档维护规则
 
@@ -173,14 +225,13 @@
 - “当前实现清单”中的模块状态
 - “与路线图对照”中的勾选项
 - “校验快照”中的命令结果
-- “下一阶段开发顺序”中的优先级
+- “当前最关键的缺口”与“下一阶段开发顺序”
 
 ## 8. 下一次更新时的完成标准
 
-当下面 4 件事完成后，可以把项目状态从“核心链路原型”升级为“最小可用版本筹备中”：
+当下面 4 件事完成后，可以把项目状态从“后端 MVP + 最小观察面”升级为“最小可用产品”：
 
-- [ ] Provider registry 可识别至少一种 provider
-- [ ] 至少一种 provider 可输出 `normalized` 结构
-- [ ] CLI 可以真正启动代理服务
-- [ ] Web 可以查看 Session 列表与单条详情
-
+- [ ] 配置文件、环境变量、CLI 参数可以统一生成可运行配置
+- [ ] CLI 至少具备 `start` + `doctor` + `export` 或同等可用命令面（`clear` 已完成）
+- [ ] Web 从只读观察页升级为最小可交互应用
+- [ ] 至少一种持久化运行模式（如 SQLite）能顺畅用于日常本地使用
