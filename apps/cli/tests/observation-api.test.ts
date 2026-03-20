@@ -925,4 +925,81 @@ describe('@llmscope/cli observation api', () => {
       await upstreamAddress.close();
     }
   });
+
+  it('clears all sessions through the observation api when confirm=true is provided', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'first' }],
+          }),
+        },
+      );
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'second' }],
+          }),
+        },
+      );
+
+      const withoutConfirmResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        { method: 'DELETE' },
+      );
+      expect(withoutConfirmResponse.status).toBe(400);
+
+      const clearResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?confirm=true`,
+        { method: 'DELETE' },
+      );
+      expect(clearResponse.status).toBe(204);
+
+      const sessionsAfterClearResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessionsAfterClear =
+        (await sessionsAfterClearResponse.json()) as Array<unknown>;
+      expect(sessionsAfterClear).toHaveLength(0);
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
 });

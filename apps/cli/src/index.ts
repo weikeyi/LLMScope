@@ -606,6 +606,18 @@ const createObservationServer = (
             return;
           }
 
+          if (request.method === 'DELETE') {
+            if (requestUrl.searchParams.get('confirm') !== 'true') {
+              sendBadRequest(response, 'Missing confirm=true query parameter.');
+              return;
+            }
+
+            await store.clearAll();
+            response.statusCode = 204;
+            response.end();
+            return;
+          }
+
           sendMethodNotAllowed(response);
           return;
         }
