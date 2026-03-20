@@ -545,7 +545,7 @@ describe('@llmscope/cli observation api', () => {
       });
       expect(optionsResponse.status).toBe(204);
       expect(optionsResponse.headers.get('access-control-allow-methods')).toBe(
-        'GET, OPTIONS',
+        'GET, DELETE, OPTIONS',
       );
       expect(methodNotAllowedResponse.status).toBe(405);
       expect(await methodNotAllowedResponse.json()).toEqual({
@@ -845,6 +845,82 @@ describe('@llmscope/cli observation api', () => {
           resolve();
         });
       }).catch(() => undefined);
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('deletes a single session through the observation api', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{
+        id: string;
+      }>;
+
+      expect(sessions).toHaveLength(1);
+      const session = sessions[0];
+      if (session === undefined) {
+        throw new Error('Expected at least one session.');
+      }
+      const sessionId = session.id;
+
+      const deleteResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessionId}`,
+        { method: 'DELETE' },
+      );
+      expect(deleteResponse.status).toBe(204);
+
+      const sessionsAfterDeleteResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessionsAfterDelete =
+        (await sessionsAfterDeleteResponse.json()) as Array<unknown>;
+      expect(sessionsAfterDelete).toHaveLength(0);
+
+      const deletedDetailResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessionId}`,
+      );
+      expect(deletedDetailResponse.status).toBe(404);
+    } finally {
       await runtime.stop();
       await upstreamAddress.close();
     }

@@ -568,17 +568,15 @@ const createObservationServer = (
     (request: IncomingMessage, response: ServerResponse) => {
       void (async () => {
         response.setHeader('access-control-allow-origin', options.corsOrigin);
-        response.setHeader('access-control-allow-methods', 'GET, OPTIONS');
+        response.setHeader(
+          'access-control-allow-methods',
+          'GET, DELETE, OPTIONS',
+        );
         response.setHeader('access-control-allow-headers', 'content-type');
 
         if (request.method === 'OPTIONS') {
           response.statusCode = 204;
           response.end();
-          return;
-        }
-
-        if (request.method !== 'GET') {
-          sendMethodNotAllowed(response);
           return;
         }
 
@@ -595,15 +593,20 @@ const createObservationServer = (
         }
 
         if (requestUrl.pathname === '/api/sessions') {
-          const queryResult = toListSessionsQuery(requestUrl);
+          if (request.method === 'GET') {
+            const queryResult = toListSessionsQuery(requestUrl);
 
-          if ('error' in queryResult) {
-            sendBadRequest(response, queryResult.error);
+            if ('error' in queryResult) {
+              sendBadRequest(response, queryResult.error);
+              return;
+            }
+
+            const sessions = await store.listSessions(queryResult.query);
+            sendJson(response, 200, sessions);
             return;
           }
 
-          const sessions = await store.listSessions(queryResult.query);
-          sendJson(response, 200, sessions);
+          sendMethodNotAllowed(response);
           return;
         }
 
@@ -612,14 +615,27 @@ const createObservationServer = (
         );
         if (sessionDetailMatch !== null) {
           const sessionId = decodeURIComponent(sessionDetailMatch[1] ?? '');
-          const session = await store.getSession(sessionId);
 
-          if (session === null) {
-            sendNotFound(response);
+          if (request.method === 'GET') {
+            const session = await store.getSession(sessionId);
+
+            if (session === null) {
+              sendNotFound(response);
+              return;
+            }
+
+            sendJson(response, 200, session);
             return;
           }
 
-          sendJson(response, 200, session);
+          if (request.method === 'DELETE') {
+            await store.deleteSession(sessionId);
+            response.statusCode = 204;
+            response.end();
+            return;
+          }
+
+          sendMethodNotAllowed(response);
           return;
         }
 
