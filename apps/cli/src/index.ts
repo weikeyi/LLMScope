@@ -1,11 +1,36 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { accessSync, constants, mkdirSync } from 'node:fs';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
+import { createServer as createNetServer } from 'node:net';
+import { dirname } from 'node:path';
 import process from 'node:process';
 import { URL } from 'node:url';
 
 import type { SessionStore } from '@llmscope/core';
-import { defaultConfig, type ResolvedPrivacyConfig, type RouteConfig } from '@llmscope/config';
-import { NodeProxyEngine, StaticRouteResolver, anthropicMessagesPlugin, openAiChatCompletionsPlugin, openAiResponsesPlugin } from '@llmscope/proxy-engine';
-import type { ListSessionsQuery, Session, SessionStatus } from '@llmscope/shared-types';
+import {
+  defaultConfig,
+  resolveConfig,
+  type LLMScopeConfig,
+  type ResolvedConfig,
+  type ResolvedPrivacyConfig,
+  type RouteConfig,
+} from '@llmscope/config';
+import {
+  NodeProxyEngine,
+  StaticRouteResolver,
+  anthropicMessagesPlugin,
+  openAiChatCompletionsPlugin,
+  openAiResponsesPlugin,
+} from '@llmscope/proxy-engine';
+import type {
+  ListSessionsQuery,
+  Session,
+  SessionStatus,
+} from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
 import { SqliteSessionStore } from '@llmscope/storage-sqlite';
 
@@ -16,6 +41,48 @@ export interface CliRuntimeOptions {
   maxSessions?: number;
   privacy?: ResolvedPrivacyConfig;
   observationPort?: number;
+  config?: ResolvedConfig;
+}
+
+export interface ParsedCliArgs {
+  runtimeOptions: CliRuntimeOptions;
+  configFilePath?: string;
+  configOverrides: LLMScopeConfig;
+}
+
+export interface StartCommand {
+  kind: 'start';
+  args: ParsedCliArgs;
+}
+
+export interface DoctorCommand {
+  kind: 'doctor';
+  configFilePath?: string;
+  configOverrides: LLMScopeConfig;
+}
+
+export interface ClearCommand {
+  kind: 'clear';
+  configFilePath?: string;
+  target: {
+    host: string;
+    port: number;
+  };
+  sessionId?: string;
+}
+
+export type CliCommand = StartCommand | DoctorCommand | ClearCommand;
+
+export interface DoctorCheckResult {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  checks: DoctorCheckResult[];
+  config: ResolvedConfig;
 }
 
 export interface CliRuntime {
@@ -33,7 +100,21 @@ export interface ObservationServer {
 
 const EXIT_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
-const usage = 'Usage: llmscope-cli --upstream <url> [--host <host>] [--port <port>]';
+const generalUsage = [
+  'Usage:',
+  '  llmscope-cli start --upstream <url> [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
+  '  llmscope-cli doctor [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
+  '',
+].join('\n');
+
+const startUsage =
+  'Usage: llmscope-cli start --upstream <url> [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]';
+
+const doctorUsage =
+  'Usage: llmscope-cli doctor [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]';
+
+const clearUsage =
+  'Usage: llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]';
 
 const parseNumberOption = (name: string, value: string | undefined): number => {
   if (value === undefined) {
@@ -49,7 +130,11 @@ const parseNumberOption = (name: string, value: string | undefined): number => {
   return parsed;
 };
 
-const takeOptionValue = (args: string[], index: number, name: string): string => {
+const takeOptionValue = (
+  args: string[],
+  index: number,
+  name: string,
+): string => {
   const value = args[index + 1];
 
   if (value === undefined || value.startsWith('--')) {
@@ -59,10 +144,12 @@ const takeOptionValue = (args: string[], index: number, name: string): string =>
   return value;
 };
 
-export const parseCliArgs = (args: string[]): CliRuntimeOptions => {
+export const parseCliArgs = (args: string[]): ParsedCliArgs => {
   let upstreamUrl: string | undefined;
   let host: string | undefined;
   let port: number | undefined;
+  let observationPort: number | undefined;
+  let configFilePath: string | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -72,24 +159,38 @@ export const parseCliArgs = (args: string[]): CliRuntimeOptions => {
         upstreamUrl = takeOptionValue(args, index, '--upstream');
         index += 1;
         break;
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
       case '--host':
         host = takeOptionValue(args, index, '--host');
         index += 1;
         break;
       case '--port':
-        port = parseNumberOption('--port', takeOptionValue(args, index, '--port'));
+        port = parseNumberOption(
+          '--port',
+          takeOptionValue(args, index, '--port'),
+        );
+        index += 1;
+        break;
+      case '--ui-port':
+        observationPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
         index += 1;
         break;
       case '--help':
       case '-h':
-        throw new Error(usage);
+        throw new Error(startUsage);
       default:
-        throw new Error(`Unknown argument: ${arg}.\n${usage}`);
+        throw new Error(`Unknown argument: ${arg}.\n${startUsage}`);
     }
   }
 
   if (upstreamUrl === undefined) {
-    throw new Error(`Missing required --upstream option.\n${usage}`);
+    throw new Error(`Missing required --upstream option.\n${startUsage}`);
   }
 
   let normalizedUpstreamUrl: string;
@@ -103,16 +204,197 @@ export const parseCliArgs = (args: string[]): CliRuntimeOptions => {
   const options: CliRuntimeOptions = {
     upstreamUrl: normalizedUpstreamUrl,
   };
+  const configOverrides: LLMScopeConfig = {
+    routes: [toRouteConfig(normalizedUpstreamUrl)],
+  };
 
   if (host !== undefined) {
     options.host = host;
+    configOverrides.proxy = {
+      ...(configOverrides.proxy ?? {}),
+      host,
+    };
   }
 
   if (port !== undefined) {
     options.port = port;
+    configOverrides.proxy = {
+      ...(configOverrides.proxy ?? {}),
+      port,
+    };
   }
 
-  return options;
+  if (observationPort !== undefined) {
+    options.observationPort = observationPort;
+    configOverrides.ui = {
+      ...(configOverrides.ui ?? {}),
+      port: observationPort,
+    };
+  }
+
+  const parsedArgs: ParsedCliArgs = {
+    runtimeOptions: options,
+    configOverrides,
+  };
+
+  if (configFilePath !== undefined) {
+    parsedArgs.configFilePath = configFilePath;
+  }
+
+  return parsedArgs;
+};
+
+const parseGlobalOptionArgs = (
+  args: string[],
+  commandUsage: string,
+): { configFilePath?: string; configOverrides: LLMScopeConfig } => {
+  let host: string | undefined;
+  let port: number | undefined;
+  let uiPort: number | undefined;
+  let configFilePath: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--port':
+        port = parseNumberOption(
+          '--port',
+          takeOptionValue(args, index, '--port'),
+        );
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(commandUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${commandUsage}`);
+    }
+  }
+
+  const configOverrides: LLMScopeConfig = {};
+
+  if (host !== undefined || port !== undefined) {
+    configOverrides.proxy = {};
+
+    if (host !== undefined) {
+      configOverrides.proxy.host = host;
+    }
+
+    if (port !== undefined) {
+      configOverrides.proxy.port = port;
+    }
+  }
+
+  if (uiPort !== undefined) {
+    configOverrides.ui = {
+      port: uiPort,
+    };
+  }
+
+  return configFilePath === undefined
+    ? { configOverrides }
+    : { configFilePath, configOverrides };
+};
+
+const parseClearCommand = (args: string[]): ClearCommand => {
+  let host: string | undefined;
+  let uiPort: number | undefined;
+  let sessionId: string | undefined;
+  let configFilePath: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--session-id':
+        sessionId = takeOptionValue(args, index, '--session-id');
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(clearUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${clearUsage}`);
+    }
+  }
+
+  const result: ClearCommand = {
+    kind: 'clear',
+    target: {
+      host: host ?? '127.0.0.1',
+      port: uiPort ?? 8788,
+    },
+  };
+
+  if (configFilePath !== undefined) {
+    result.configFilePath = configFilePath;
+  }
+
+  if (sessionId !== undefined) {
+    result.sessionId = sessionId;
+  }
+
+  return result;
+};
+
+export const parseCommand = (args: string[]): CliCommand => {
+  const [command, ...rest] = args;
+
+  if (command === undefined || command === '--help' || command === '-h') {
+    throw new Error(generalUsage);
+  }
+
+  if (command === 'start') {
+    return {
+      kind: 'start',
+      args: parseCliArgs(rest),
+    };
+  }
+
+  if (command === 'doctor') {
+    const parsed = parseGlobalOptionArgs(rest, doctorUsage);
+    return {
+      kind: 'doctor',
+      ...parsed,
+    };
+  }
+
+  if (command === 'clear') {
+    return parseClearCommand(rest);
+  }
+
+  throw new Error(`Unknown command: ${command}.\n${generalUsage}`);
 };
 
 const formatStatusCode = (session: Session): string => {
@@ -179,7 +461,11 @@ const toResolvedRoute = (route: RouteConfig) => {
   return resolvedRoute;
 };
 
-const sendJson = (response: ServerResponse, statusCode: number, body: unknown): void => {
+const sendJson = (
+  response: ServerResponse,
+  statusCode: number,
+  body: unknown,
+): void => {
   response.statusCode = statusCode;
   response.setHeader('content-type', 'application/json; charset=utf-8');
   response.end(JSON.stringify(body));
@@ -207,7 +493,9 @@ const isSessionStatus = (value: string): value is SessionStatus => {
   return ['pending', 'streaming', 'completed', 'error'].includes(value);
 };
 
-const takeSingleSearchParam = (value: string | string[] | undefined): string | undefined => {
+const takeSingleSearchParam = (
+  value: string | string[] | undefined,
+): string | undefined => {
   if (Array.isArray(value)) {
     return value[0];
   }
@@ -215,7 +503,9 @@ const takeSingleSearchParam = (value: string | string[] | undefined): string | u
   return value;
 };
 
-const toListSessionsQuery = (url: URL): { query: ListSessionsQuery } | { error: string } => {
+const toListSessionsQuery = (
+  url: URL,
+): { query: ListSessionsQuery } | { error: string } => {
   const query: ListSessionsQuery = {};
 
   const status = takeSingleSearchParam(url.searchParams.getAll('status'));
@@ -274,76 +564,83 @@ const createObservationServer = (
     host: options.host,
     port: options.port,
   };
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    void (async () => {
-      response.setHeader('access-control-allow-origin', options.corsOrigin);
-      response.setHeader('access-control-allow-methods', 'GET, OPTIONS');
-      response.setHeader('access-control-allow-headers', 'content-type');
+  const server = createServer(
+    (request: IncomingMessage, response: ServerResponse) => {
+      void (async () => {
+        response.setHeader('access-control-allow-origin', options.corsOrigin);
+        response.setHeader('access-control-allow-methods', 'GET, OPTIONS');
+        response.setHeader('access-control-allow-headers', 'content-type');
 
-      if (request.method === 'OPTIONS') {
-        response.statusCode = 204;
-        response.end();
-        return;
-      }
+        if (request.method === 'OPTIONS') {
+          response.statusCode = 204;
+          response.end();
+          return;
+        }
 
-      if (request.method !== 'GET') {
-        sendMethodNotAllowed(response);
-        return;
-      }
+        if (request.method !== 'GET') {
+          sendMethodNotAllowed(response);
+          return;
+        }
 
-      const requestUrl = new URL(
-        request.url ?? '/',
-        `http://${request.headers.host ?? `${options.host}:${options.port}`}`,
-      );
+        const requestUrl = new URL(
+          request.url ?? '/',
+          `http://${request.headers.host ?? `${options.host}:${options.port}`}`,
+        );
 
-      if (requestUrl.pathname === '/health') {
-        sendJson(response, 200, {
-          ok: true,
+        if (requestUrl.pathname === '/health') {
+          sendJson(response, 200, {
+            ok: true,
+          });
+          return;
+        }
+
+        if (requestUrl.pathname === '/api/sessions') {
+          const queryResult = toListSessionsQuery(requestUrl);
+
+          if ('error' in queryResult) {
+            sendBadRequest(response, queryResult.error);
+            return;
+          }
+
+          const sessions = await store.listSessions(queryResult.query);
+          sendJson(response, 200, sessions);
+          return;
+        }
+
+        const sessionDetailMatch = /^\/api\/sessions\/([^/]+)$/.exec(
+          requestUrl.pathname,
+        );
+        if (sessionDetailMatch !== null) {
+          const sessionId = decodeURIComponent(sessionDetailMatch[1] ?? '');
+          const session = await store.getSession(sessionId);
+
+          if (session === null) {
+            sendNotFound(response);
+            return;
+          }
+
+          sendJson(response, 200, session);
+          return;
+        }
+
+        sendNotFound(response);
+      })().catch((error: unknown) => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Unknown observation server error.';
+
+        if (response.headersSent) {
+          response.end();
+          return;
+        }
+
+        sendJson(response, 500, {
+          error: message,
         });
-        return;
-      }
-
-      if (requestUrl.pathname === '/api/sessions') {
-        const queryResult = toListSessionsQuery(requestUrl);
-
-        if ('error' in queryResult) {
-          sendBadRequest(response, queryResult.error);
-          return;
-        }
-
-        const sessions = await store.listSessions(queryResult.query);
-        sendJson(response, 200, sessions);
-        return;
-      }
-
-      const sessionDetailMatch = /^\/api\/sessions\/([^/]+)$/.exec(requestUrl.pathname);
-      if (sessionDetailMatch !== null) {
-        const sessionId = decodeURIComponent(sessionDetailMatch[1] ?? '');
-      const session = await store.getSession(sessionId);
-
-        if (session === null) {
-          sendNotFound(response);
-          return;
-        }
-
-        sendJson(response, 200, session);
-        return;
-      }
-
-      sendNotFound(response);
-    })().catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Unknown observation server error.';
-
-      if (response.headersSent) {
-        response.end();
-        return;
-      }
-
-      sendJson(response, 500, {
-        error: message,
       });
-    });
-  });
+    },
+  );
 
   let started = false;
 
@@ -362,7 +659,10 @@ const createObservationServer = (
           server.off('error', onError);
           const listeningAddress = server.address();
 
-          if (listeningAddress === null || typeof listeningAddress === 'string') {
+          if (
+            listeningAddress === null ||
+            typeof listeningAddress === 'string'
+          ) {
             reject(new Error('Observation server address unavailable.'));
             return;
           }
@@ -402,11 +702,13 @@ const createObservationServer = (
 };
 
 const createSessionStore = (options: CliRuntimeOptions): SessionStore => {
-  const resolvedMaxSessions = options.maxSessions ?? defaultConfig.storage.memory.maxSessions;
+  const config = options.config ?? defaultConfig;
+  const resolvedMaxSessions =
+    options.maxSessions ?? config.storage.memory.maxSessions;
 
-  if (defaultConfig.storage.mode === 'sqlite') {
+  if (config.storage.mode === 'sqlite') {
     return new SqliteSessionStore({
-      filePath: defaultConfig.storage.sqlite.filePath,
+      filePath: config.storage.sqlite.filePath,
       maxSessions: resolvedMaxSessions,
     });
   }
@@ -416,26 +718,173 @@ const createSessionStore = (options: CliRuntimeOptions): SessionStore => {
   });
 };
 
+const getNodeMajorVersion = (): number => {
+  const major = Number(process.versions.node.split('.')[0] ?? '0');
+  return Number.isInteger(major) ? major : 0;
+};
+
+const checkPortAvailable = async (
+  host: string,
+  port: number,
+): Promise<DoctorCheckResult> => {
+  const server = createNetServer();
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: NodeJS.ErrnoException) => {
+        server.off('listening', onListening);
+        reject(error);
+      };
+
+      const onListening = () => {
+        server.off('error', onError);
+        resolve();
+      };
+
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(port, host);
+    });
+
+    return {
+      label: `port ${host}:${port}`,
+      ok: true,
+      detail: 'available',
+    };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : 'unknown port error';
+    return {
+      label: `port ${host}:${port}`,
+      ok: false,
+      detail: message,
+    };
+  } finally {
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+};
+
+const checkDirectoryWritable = (
+  directoryPath: string,
+  label: string,
+): DoctorCheckResult => {
+  try {
+    mkdirSync(directoryPath, { recursive: true });
+    accessSync(directoryPath, constants.W_OK);
+    return {
+      label,
+      ok: true,
+      detail: directoryPath,
+    };
+  } catch (error) {
+    return {
+      label,
+      ok: false,
+      detail:
+        error instanceof Error ? error.message : 'directory is not writable',
+    };
+  }
+};
+
+const checkSqliteWritable = (config: ResolvedConfig): DoctorCheckResult => {
+  if (config.storage.mode !== 'sqlite') {
+    return {
+      label: 'sqlite writable',
+      ok: true,
+      detail: 'skipped (storage mode is not sqlite)',
+    };
+  }
+
+  try {
+    const store = new SqliteSessionStore({
+      filePath: config.storage.sqlite.filePath,
+      maxSessions: 1,
+    });
+    store.close();
+    return {
+      label: 'sqlite writable',
+      ok: true,
+      detail: config.storage.sqlite.filePath,
+    };
+  } catch (error) {
+    return {
+      label: 'sqlite writable',
+      ok: false,
+      detail:
+        error instanceof Error ? error.message : 'failed to open sqlite store',
+    };
+  }
+};
+
+export const runDoctor = async (
+  config: ResolvedConfig,
+): Promise<DoctorReport> => {
+  const checks: DoctorCheckResult[] = [];
+
+  checks.push({
+    label: 'node version',
+    ok: getNodeMajorVersion() >= 20,
+    detail: process.versions.node,
+  });
+
+  checks.push(await checkPortAvailable(config.proxy.host, config.proxy.port));
+
+  if (config.ui.enabled) {
+    checks.push(await checkPortAvailable(config.proxy.host, config.ui.port));
+  } else {
+    checks.push({
+      label: `port ${config.proxy.host}:${config.ui.port}`,
+      ok: true,
+      detail: 'skipped (ui disabled)',
+    });
+  }
+
+  checks.push(
+    checkDirectoryWritable(
+      dirname(config.storage.sqlite.filePath),
+      'data directory writable',
+    ),
+  );
+  checks.push(checkSqliteWritable(config));
+
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+    config,
+  };
+};
+
+const formatDoctorCheck = (check: DoctorCheckResult): string => {
+  return `[${check.ok ? 'ok' : 'fail'}] ${check.label}: ${check.detail}`;
+};
+
 export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
-  const resolvedHost = options.host ?? defaultConfig.proxy.host;
-  const resolvedPort = options.port ?? defaultConfig.proxy.port;
+  const config = options.config ?? defaultConfig;
+  const resolvedHost = options.host ?? config.proxy.host;
+  const resolvedPort = options.port ?? config.proxy.port;
   const route = toRouteConfig(options.upstreamUrl);
   const store = createSessionStore(options);
-  const privacy = options.privacy ?? defaultConfig.privacy;
+  const privacy = options.privacy ?? config.privacy;
   const engine = new NodeProxyEngine({
     host: resolvedHost,
     port: resolvedPort,
-    mode: defaultConfig.proxy.mode,
+    mode: config.proxy.mode,
     routeResolver: new StaticRouteResolver(toResolvedRoute(route)),
     store,
     privacy,
-    providerPlugins: [openAiChatCompletionsPlugin, openAiResponsesPlugin, anthropicMessagesPlugin],
+    providerPlugins: [
+      openAiChatCompletionsPlugin,
+      openAiResponsesPlugin,
+      anthropicMessagesPlugin,
+    ],
   });
-  const observationServer = defaultConfig.ui.enabled
+  const observationServer = config.ui.enabled
     ? createObservationServer(store, {
         host: resolvedHost,
-        port: options.observationPort ?? defaultConfig.ui.port,
-        corsOrigin: defaultConfig.ui.corsOrigin,
+        port: options.observationPort ?? config.ui.port,
+        corsOrigin: config.ui.corsOrigin,
       })
     : null;
 
@@ -458,7 +907,9 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
 
       started = true;
       const address = engine.getAddress();
-      console.log(`LLMScope proxy listening on http://${address.host}:${address.port}`);
+      console.log(
+        `LLMScope proxy listening on http://${address.host}:${address.port}`,
+      );
       console.log(`Forwarding requests to ${route.targetBaseUrl}`);
 
       if (observationServer !== null) {
@@ -490,7 +941,56 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
 };
 
 export const runCli = async (args: string[]): Promise<void> => {
-  const runtime = createCliRuntime(parseCliArgs(args));
+  const command = parseCommand(args);
+
+  if (command.kind === 'doctor') {
+    const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
+      overrides: command.configOverrides,
+    };
+
+    if (command.configFilePath !== undefined) {
+      resolveOptions.filePath = command.configFilePath;
+    }
+
+    const report = await runDoctor(resolveConfig(resolveOptions));
+
+    for (const check of report.checks) {
+      console.log(formatDoctorCheck(check));
+    }
+
+    console.log(`Doctor overall status: ${report.ok ? 'ok' : 'failed'}`);
+
+    if (!report.ok) {
+      process.exitCode = 1;
+    }
+
+    return;
+  }
+
+  if (command.kind === 'clear') {
+    throw new Error('Clear command not yet implemented.');
+  }
+
+  const parsedArgs = command.args;
+  const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
+    overrides: parsedArgs.configOverrides,
+  };
+
+  if (parsedArgs.configFilePath !== undefined) {
+    resolveOptions.filePath = parsedArgs.configFilePath;
+  }
+
+  const resolvedConfig = resolveConfig(resolveOptions);
+
+  const runtime = createCliRuntime({
+    ...parsedArgs.runtimeOptions,
+    config: resolvedConfig,
+    maxSessions: resolvedConfig.storage.memory.maxSessions,
+    privacy: resolvedConfig.privacy,
+    observationPort: resolvedConfig.ui.port,
+    host: resolvedConfig.proxy.host,
+    port: resolvedConfig.proxy.port,
+  });
   await runtime.start();
 
   let isStopping = false;
@@ -522,11 +1022,14 @@ export const runCli = async (args: string[]): Promise<void> => {
   });
 };
 
-const isMainModule = process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+const isMainModule =
+  process.argv[1] !== undefined &&
+  import.meta.url === new URL(`file://${process.argv[1]}`).href;
 
 if (isMainModule) {
   runCli(process.argv.slice(2)).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : 'Unknown CLI error.';
+    const message =
+      error instanceof Error ? error.message : 'Unknown CLI error.';
     console.error(message);
     process.exitCode = 1;
   });

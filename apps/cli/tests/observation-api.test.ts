@@ -1,11 +1,21 @@
 import { once } from 'node:events';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 
 import { describe, expect, it } from 'vitest';
 
 import type { Session } from '@llmscope/shared-types';
 
-import { createCliRuntime, parseCliArgs } from '../src/index.js';
+import {
+  createCliRuntime,
+  parseCliArgs,
+  parseCommand,
+  runDoctor,
+} from '../src/index.js';
 
 const readBody = async (request: IncomingMessage): Promise<string> => {
   const chunks: Buffer[] = [];
@@ -49,24 +59,182 @@ const listen = async (
 describe('@llmscope/cli parseCliArgs', () => {
   it('parses valid CLI arguments and applies optional fields', () => {
     expect(
-      parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--host', '0.0.0.0', '--port', '9000']),
+      parseCliArgs([
+        '--upstream',
+        'http://127.0.0.1:3000',
+        '--config',
+        './llmscope.yaml',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '9000',
+        '--ui-port',
+        '9001',
+      ]),
     ).toEqual({
-      upstreamUrl: 'http://127.0.0.1:3000/',
-      host: '0.0.0.0',
-      port: 9000,
+      runtimeOptions: {
+        upstreamUrl: 'http://127.0.0.1:3000/',
+        host: '0.0.0.0',
+        port: 9000,
+        observationPort: 9001,
+      },
+      configFilePath: './llmscope.yaml',
+      configOverrides: {
+        proxy: {
+          host: '0.0.0.0',
+          port: 9000,
+        },
+        ui: {
+          port: 9001,
+        },
+        routes: [
+          {
+            id: 'default',
+            targetBaseUrl: 'http://127.0.0.1:3000/',
+            rewriteHost: true,
+          },
+        ],
+      },
     });
   });
 
   it('rejects invalid CLI arguments', () => {
-    expect(() => parseCliArgs([])).toThrow('Missing required --upstream option.');
-    expect(() => parseCliArgs(['--upstream', 'not-a-url'])).toThrow('Invalid upstream URL: not-a-url.');
-    expect(() => parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--port', '-1'])).toThrow(
-      'Invalid value for --port: -1.',
+    expect(() => parseCliArgs([])).toThrow(
+      'Missing required --upstream option.',
     );
-    expect(() => parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--wat'])).toThrow(
-      'Unknown argument: --wat.',
+    expect(() => parseCliArgs(['--upstream', 'not-a-url'])).toThrow(
+      'Invalid upstream URL: not-a-url.',
     );
-    expect(() => parseCliArgs(['--help'])).toThrow('Usage: llmscope-cli --upstream <url>');
+    expect(() =>
+      parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--port', '-1']),
+    ).toThrow('Invalid value for --port: -1.');
+    expect(() =>
+      parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--ui-port', '-1']),
+    ).toThrow('Invalid value for --ui-port: -1.');
+    expect(() =>
+      parseCliArgs(['--upstream', 'http://127.0.0.1:3000', '--wat']),
+    ).toThrow('Unknown argument: --wat.');
+    expect(() => parseCliArgs(['--help'])).toThrow(
+      'Usage: llmscope-cli start --upstream <url>',
+    );
+  });
+});
+
+describe('@llmscope/cli parseCommand', () => {
+  it('parses the start subcommand', () => {
+    expect(
+      parseCommand(['start', '--upstream', 'http://127.0.0.1:3000']),
+    ).toEqual({
+      kind: 'start',
+      args: {
+        runtimeOptions: {
+          upstreamUrl: 'http://127.0.0.1:3000/',
+        },
+        configOverrides: {
+          routes: [
+            {
+              id: 'default',
+              targetBaseUrl: 'http://127.0.0.1:3000/',
+              rewriteHost: true,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it('parses the doctor subcommand with config overrides', () => {
+    expect(
+      parseCommand([
+        'doctor',
+        '--config',
+        './llmscope.yaml',
+        '--port',
+        '9000',
+        '--ui-port',
+        '9001',
+      ]),
+    ).toEqual({
+      kind: 'doctor',
+      configFilePath: './llmscope.yaml',
+      configOverrides: {
+        proxy: {
+          port: 9000,
+        },
+        ui: {
+          port: 9001,
+        },
+      },
+    });
+  });
+
+  it('rejects unknown commands', () => {
+    expect(() => parseCommand(['wat'])).toThrow('Unknown command: wat.');
+  });
+
+  it('parses the clear subcommand with optional target arguments', () => {
+    expect(
+      parseCommand([
+        'clear',
+        '--config',
+        './llmscope.yaml',
+        '--host',
+        '127.0.0.1',
+        '--ui-port',
+        '9001',
+        '--session-id',
+        'session-123',
+      ]),
+    ).toEqual({
+      kind: 'clear',
+      configFilePath: './llmscope.yaml',
+      target: {
+        host: '127.0.0.1',
+        port: 9001,
+      },
+      sessionId: 'session-123',
+    });
+  });
+});
+
+describe('@llmscope/cli doctor', () => {
+  it('reports a healthy config for memory storage', async () => {
+    const report = await runDoctor({
+      proxy: {
+        host: '127.0.0.1',
+        port: 0,
+        mode: 'gateway',
+      },
+      ui: {
+        enabled: true,
+        port: 0,
+        corsOrigin: 'http://127.0.0.1:8788',
+      },
+      storage: {
+        mode: 'memory',
+        memory: {
+          maxSessions: 10,
+        },
+        sqlite: {
+          filePath: './data/llmscope.db',
+        },
+      },
+      privacy: {
+        mode: 'balanced',
+      },
+      routes: [],
+    });
+
+    expect(report.ok).toBe(true);
+    expect(
+      report.checks.some((check) => check.label === 'node version' && check.ok),
+    ).toBe(true);
+    expect(
+      report.checks.some(
+        (check) =>
+          check.label === 'sqlite writable' && check.detail.includes('skipped'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -91,6 +259,7 @@ describe('@llmscope/cli observation api', () => {
       host: '127.0.0.1',
       port: 0,
       maxSessions: 10,
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -112,14 +281,21 @@ describe('@llmscope/cli observation api', () => {
           headers: {
             'content-type': 'application/json',
           },
-          body: JSON.stringify({ model: 'gpt-test', messages: [{ role: 'user', content: 'hi' }] }),
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
         },
       );
       const proxyJson = (await proxyResponse.json()) as { ok: boolean };
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?status=completed&search=%2Fv1%2Fchat&limit=10`,
       );
-      const sessions = (await sessionsResponse.json()) as Array<{ id: string; model?: string; path: string }>;
+      const sessions = (await sessionsResponse.json()) as Array<{
+        id: string;
+        model?: string;
+        path: string;
+      }>;
       const detailResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
       );
@@ -190,6 +366,7 @@ describe('@llmscope/cli observation api', () => {
       host: '127.0.0.1',
       port: 0,
       maxSessions: 10,
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -201,22 +378,31 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
+      const proxyResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            input: 'hi',
+            instructions: 'Be concise.',
+          }),
         },
-        body: JSON.stringify({
-          model: 'gpt-4.1-mini',
-          input: 'hi',
-          instructions: 'Be concise.',
-        }),
-      });
-      const proxyJson = (await proxyResponse.json()) as { body?: { model: string } };
+      );
+      const proxyJson = (await proxyResponse.json()) as {
+        body?: { model: string };
+      };
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
       );
-      const sessions = (await sessionsResponse.json()) as Array<{ id: string; provider?: string; path: string }>;
+      const sessions = (await sessionsResponse.json()) as Array<{
+        id: string;
+        provider?: string;
+        path: string;
+      }>;
       const detailResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
       );
@@ -253,11 +439,17 @@ describe('@llmscope/cli observation api', () => {
         response.statusCode = 200;
         response.setHeader('content-type', 'text/event-stream');
         response.write('event: response.created\n');
-        response.write('data: {"type":"response.created","response":{"status":"in_progress"}}\n\n');
+        response.write(
+          'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n',
+        );
         response.write('event: response.output_text.delta\n');
-        response.write('data: {"type":"response.output_text.delta","delta":"Hello"}\n\n');
+        response.write(
+          'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
+        );
         response.write('event: response.completed\n');
-        response.write('data: {"type":"response.completed","response":{"status":"completed"}}\n\n');
+        response.write(
+          'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        );
         response.end();
       },
     );
@@ -267,6 +459,7 @@ describe('@llmscope/cli observation api', () => {
       host: '127.0.0.1',
       port: 0,
       maxSessions: 10,
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -278,17 +471,20 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const streamResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
+      const streamResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            stream: true,
+            input: 'hi',
+          }),
         },
-        body: JSON.stringify({
-          model: 'gpt-4.1-mini',
-          stream: true,
-          input: 'hi',
-        }),
-      });
+      );
       const streamBody = await streamResponse.text();
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
@@ -329,9 +525,14 @@ describe('@llmscope/cli observation api', () => {
         'delta',
         'message_stop',
       ]);
-      expect(detail.streamEvents?.[0]?.normalized).toEqual({ status: 'in_progress' });
+      expect(detail.streamEvents?.[0]?.normalized).toEqual({
+        status: 'in_progress',
+      });
       expect(detail.streamEvents?.[1]?.normalized).toEqual({ text: 'Hello' });
-      expect(detail.streamEvents?.[2]?.normalized).toEqual({ done: true, status: 'completed' });
+      expect(detail.streamEvents?.[2]?.normalized).toEqual({
+        done: true,
+        status: 'completed',
+      });
       expect(missingResponse.status).toBe(404);
       expect(await missingResponse.json()).toEqual({ error: 'Not found.' });
       expect(invalidLimitResponse.status).toBe(400);
@@ -343,9 +544,13 @@ describe('@llmscope/cli observation api', () => {
         error: 'Invalid status query value: wat.',
       });
       expect(optionsResponse.status).toBe(204);
-      expect(optionsResponse.headers.get('access-control-allow-methods')).toBe('GET, OPTIONS');
+      expect(optionsResponse.headers.get('access-control-allow-methods')).toBe(
+        'GET, OPTIONS',
+      );
       expect(methodNotAllowedResponse.status).toBe(405);
-      expect(await methodNotAllowedResponse.json()).toEqual({ error: 'Method not allowed.' });
+      expect(await methodNotAllowedResponse.json()).toEqual({
+        error: 'Method not allowed.',
+      });
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -377,6 +582,7 @@ describe('@llmscope/cli observation api', () => {
       host: '127.0.0.1',
       port: 0,
       maxSessions: 10,
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -388,22 +594,29 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/messages`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
+      const proxyResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'claude-3-5-sonnet',
+            messages: [{ role: 'user', content: 'hi' }],
+            max_tokens: 256,
+          }),
         },
-        body: JSON.stringify({
-          model: 'claude-3-5-sonnet',
-          messages: [{ role: 'user', content: 'hi' }],
-          max_tokens: 256,
-        }),
-      });
+      );
       await proxyResponse.json();
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fmessages`,
       );
-      const sessions = (await sessionsResponse.json()) as Array<{ id: string; provider?: string; path: string }>;
+      const sessions = (await sessionsResponse.json()) as Array<{
+        id: string;
+        provider?: string;
+        path: string;
+      }>;
       const detailResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessions[0]?.id ?? ''}`,
       );
@@ -426,7 +639,9 @@ describe('@llmscope/cli observation api', () => {
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 256,
       });
-      expect(detail.response?.bodyJson).toMatchObject({ stop_reason: 'end_turn' });
+      expect(detail.response?.bodyJson).toMatchObject({
+        stop_reason: 'end_turn',
+      });
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -461,6 +676,7 @@ describe('@llmscope/cli observation api', () => {
       port: 0,
       maxSessions: 10,
       privacy: { mode: 'strict' },
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -472,18 +688,21 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
-        method: 'POST',
-        headers: {
-          authorization: 'Bearer top-secret',
-          'content-type': 'application/json',
+      const proxyResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer top-secret',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            input: 'private prompt',
+            instructions: 'keep this secret',
+          }),
         },
-        body: JSON.stringify({
-          model: 'gpt-4.1-mini',
-          input: 'private prompt',
-          instructions: 'keep this secret',
-        }),
-      });
+      );
       await proxyResponse.json();
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
@@ -504,7 +723,9 @@ describe('@llmscope/cli observation api', () => {
         instructions: [{ parts: [{ text: '[redacted]' }] }],
       });
       expect(detail.response?.headers['set-cookie']).toBe('[redacted]');
-      expect(detail.warnings?.some((warning) => warning.includes('Redacted'))).toBe(true);
+      expect(
+        detail.warnings?.some((warning) => warning.includes('Redacted')),
+      ).toBe(true);
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -526,6 +747,7 @@ describe('@llmscope/cli observation api', () => {
       port: 0,
       maxSessions: 10,
       privacy: { mode: 'off' },
+      observationPort: 0,
     });
 
     await runtime.start();
@@ -537,17 +759,20 @@ describe('@llmscope/cli observation api', () => {
     }
 
     try {
-      const proxyResponse = await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`, {
-        method: 'POST',
-        headers: {
-          authorization: 'Bearer top-secret',
-          'content-type': 'application/json',
+      const proxyResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
+        {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer top-secret',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            input: 'private prompt',
+          }),
         },
-        body: JSON.stringify({
-          model: 'gpt-4.1-mini',
-          input: 'private prompt',
-        }),
-      });
+      );
       await proxyResponse.json();
       const sessionsResponse = await fetch(
         `http://${observationAddress.host}:${observationAddress.port}/api/sessions?search=%2Fv1%2Fresponses`,
@@ -559,7 +784,9 @@ describe('@llmscope/cli observation api', () => {
       const detail = (await detailResponse.json()) as Session;
 
       expect(detail.request.headers.authorization).toBe('Bearer top-secret');
-      expect(detail.request.bodyJson).toMatchObject({ input: 'private prompt' });
+      expect(detail.request.bodyJson).toMatchObject({
+        input: 'private prompt',
+      });
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -575,10 +802,12 @@ describe('@llmscope/cli observation api', () => {
       },
     );
     const upstreamAddress = await listen(upstream);
-    const blockingServer = createServer((_request: IncomingMessage, response: ServerResponse) => {
-      response.statusCode = 200;
-      response.end('blocked');
-    });
+    const blockingServer = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.end('blocked');
+      },
+    );
     const blockingServerAddress = await listen(blockingServer);
 
     const runtime = createCliRuntime({
@@ -600,7 +829,11 @@ describe('@llmscope/cli observation api', () => {
       await blockingServerAddress.close();
       await runtime.start();
       const proxyAddress = runtime.getProxyAddress();
-      await expect(fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`)).resolves.toBeDefined();
+      await expect(
+        fetch(
+          `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        ),
+      ).resolves.toBeDefined();
     } finally {
       await new Promise<void>((resolve, reject) => {
         blockingServer.close((error) => {
