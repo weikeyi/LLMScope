@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
 import {
   createServer,
@@ -1887,6 +1887,313 @@ describe('@llmscope/cli observation api', () => {
         'missing',
       ]),
     ).rejects.toThrow();
+  });
+
+  it('export command writes a single session as JSON to stdout', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+
+      const sessionsResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+      );
+      const sessions = (await sessionsResponse.json()) as Array<{ id: string }>;
+      const session = sessions[0];
+
+      if (session === undefined) {
+        throw new Error('Expected a captured session.');
+      }
+
+      const { logs } = await captureConsole(async () =>
+        runCli([
+          'export',
+          '--host',
+          observationAddress.host,
+          '--ui-port',
+          String(observationAddress.port),
+          '--session-id',
+          session.id,
+        ]),
+      );
+
+      expect(logs).toHaveLength(1);
+      const output = logs[0];
+      if (output === undefined) {
+        throw new Error('Expected export command output.');
+      }
+      const detail = JSON.parse(output) as Session;
+      expect(detail.id).toBe(session.id);
+      expect(detail.request.bodyJson).toEqual({
+        model: 'gpt-test',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('export command writes filtered sessions as a JSON array file and creates parent directories', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    const outputPath = join(
+      createTempDirectory(),
+      'exports',
+      'sessions.json',
+    );
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-json',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+
+      await runCli([
+        'export',
+        '--host',
+        observationAddress.host,
+        '--ui-port',
+        String(observationAddress.port),
+        '--status',
+        'completed',
+        '--format',
+        'json',
+        '--output',
+        outputPath,
+      ]);
+
+      const exported = JSON.parse(readFileSync(outputPath, 'utf8')) as Session[];
+      expect(exported).toHaveLength(1);
+      expect(exported[0]?.normalized?.model).toBe('gpt-json');
+      expect(exported[0]?.transport.path).toBe('/v1/chat/completions');
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('export command writes filtered sessions as NDJSON', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    const outputPath = join(
+      createTempDirectory(),
+      'exports',
+      'sessions.ndjson',
+    );
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-ndjson',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/responses`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4.1-mini',
+            input: 'hello',
+          }),
+        },
+      );
+
+      await runCli([
+        'export',
+        '--host',
+        observationAddress.host,
+        '--ui-port',
+        String(observationAddress.port),
+        '--status',
+        'completed',
+        '--format',
+        'ndjson',
+        '--output',
+        outputPath,
+      ]);
+
+      const exported = readFileSync(outputPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as Session);
+      expect(exported).toHaveLength(2);
+      expect(exported.map((session) => session.transport.path).sort()).toEqual([
+        '/v1/chat/completions',
+        '/v1/responses',
+      ]);
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('export command uses config file observation target when host and port are omitted', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.2',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    const cwd = createTempDirectory();
+    const configFilePath = join(cwd, 'llmscope.yaml');
+
+    writeFileSync(
+      configFilePath,
+      [
+        'proxy:',
+        '  host: 127.0.0.2',
+        'ui:',
+        `  port: ${observationAddress.port}`,
+        'storage:',
+        '  mode: memory',
+      ].join('\n'),
+      'utf8',
+    );
+
+    try {
+      await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-config',
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        },
+      );
+
+      const { logs } = await captureConsole(async () =>
+        runCli(['export', '--config', configFilePath, '--format', 'json']),
+      );
+
+      expect(logs).toHaveLength(1);
+      const exported = JSON.parse(logs[0] ?? '[]') as Session[];
+      expect(exported).toHaveLength(1);
+      expect(exported[0]?.normalized?.model).toBe('gpt-config');
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
   });
 
   it('clear command shows help for --help', () => {

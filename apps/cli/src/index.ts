@@ -1,4 +1,4 @@
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync, writeFileSync } from 'node:fs';
 import {
   createServer,
   type IncomingMessage,
@@ -793,6 +793,27 @@ const buildObservationBaseUrl = (host: string, port: number): string => {
   return `http://${host}:${port}`;
 };
 
+const applyListSessionsQuery = (
+  requestUrl: URL,
+  query: ListSessionsQuery,
+): void => {
+  if (query.status !== undefined) {
+    requestUrl.searchParams.set('status', query.status);
+  }
+  if (query.provider !== undefined) {
+    requestUrl.searchParams.set('provider', query.provider);
+  }
+  if (query.model !== undefined) {
+    requestUrl.searchParams.set('model', query.model);
+  }
+  if (query.search !== undefined) {
+    requestUrl.searchParams.set('search', query.search);
+  }
+  if (query.limit !== undefined) {
+    requestUrl.searchParams.set('limit', String(query.limit));
+  }
+};
+
 const toResolveConfigOptions = (
   overrides: LLMScopeConfig,
   configFilePath?: string,
@@ -820,6 +841,72 @@ const resolveObservationTarget = (
     host: target.host ?? resolvedConfig.proxy.host,
     port: target.port ?? resolvedConfig.ui.port,
   };
+};
+
+const fetchSessionSummaries = async (
+  target: { host: string; port: number },
+  query: ListSessionsQuery,
+): Promise<SessionSummary[]> => {
+  const requestUrl = new URL(
+    '/api/sessions',
+    buildObservationBaseUrl(target.host, target.port),
+  );
+
+  applyListSessionsQuery(requestUrl, query);
+
+  const response = await fetch(requestUrl);
+  if (!response.ok) {
+    throw new Error(await readErrorBody(response));
+  }
+
+  return (await response.json()) as SessionSummary[];
+};
+
+const fetchSessionDetail = async (
+  target: { host: string; port: number },
+  sessionId: string,
+): Promise<Session> => {
+  const response = await fetch(
+    `${buildObservationBaseUrl(target.host, target.port)}/api/sessions/${encodeURIComponent(sessionId)}`,
+  );
+
+  if (!response.ok) {
+    throw new Error(await readErrorBody(response));
+  }
+
+  return (await response.json()) as Session;
+};
+
+const formatExportPayload = (
+  sessions: Session[],
+  format: 'json' | 'ndjson',
+  singleSession: boolean,
+): string => {
+  if (singleSession) {
+    const session = sessions[0];
+
+    if (session === undefined) {
+      throw new Error('Expected a session to export.');
+    }
+
+    return JSON.stringify(session, null, 2);
+  }
+
+  if (format === 'ndjson') {
+    return sessions.map((session) => JSON.stringify(session)).join('\n');
+  }
+
+  return JSON.stringify(sessions, null, 2);
+};
+
+const writeExportPayload = (payload: string, outputPath?: string): void => {
+  if (outputPath === undefined) {
+    console.log(payload);
+    return;
+  }
+
+  mkdirSync(dirname(outputPath), { recursive: true });
+  writeFileSync(outputPath, payload, 'utf8');
 };
 
 const toRouteConfig = (upstreamUrl: string): RouteConfig => ({
@@ -1427,33 +1514,7 @@ export const runCli = async (args: string[]): Promise<void> => {
   if (command.kind === 'list') {
     const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
     const target = resolveObservationTarget(command.target, resolvedConfig);
-    const requestUrl = new URL(
-      '/api/sessions',
-      buildObservationBaseUrl(target.host, target.port),
-    );
-
-    if (command.query.status !== undefined) {
-      requestUrl.searchParams.set('status', command.query.status);
-    }
-    if (command.query.provider !== undefined) {
-      requestUrl.searchParams.set('provider', command.query.provider);
-    }
-    if (command.query.model !== undefined) {
-      requestUrl.searchParams.set('model', command.query.model);
-    }
-    if (command.query.search !== undefined) {
-      requestUrl.searchParams.set('search', command.query.search);
-    }
-    if (command.query.limit !== undefined) {
-      requestUrl.searchParams.set('limit', String(command.query.limit));
-    }
-
-    const response = await fetch(requestUrl);
-    if (!response.ok) {
-      throw new Error(await readErrorBody(response));
-    }
-
-    const sessions = (await response.json()) as SessionSummary[];
+    const sessions = await fetchSessionSummaries(target, command.query);
 
     if (sessions.length === 0) {
       console.log('No captured sessions found.');
@@ -1480,6 +1541,28 @@ export const runCli = async (args: string[]): Promise<void> => {
 
     const session = (await response.json()) as Session;
     console.log(JSON.stringify(session, null, 2));
+    return;
+  }
+
+  if (command.kind === 'export') {
+    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
+    const target = resolveObservationTarget(command.target, resolvedConfig);
+
+    const sessions =
+      command.sessionId !== undefined
+        ? [await fetchSessionDetail(target, command.sessionId)]
+        : await Promise.all(
+            (
+              await fetchSessionSummaries(target, command.query)
+            ).map(async (session) => fetchSessionDetail(target, session.id)),
+          );
+
+    const payload = formatExportPayload(
+      sessions,
+      command.format,
+      command.sessionId !== undefined,
+    );
+    writeExportPayload(payload, command.outputPath);
     return;
   }
 
