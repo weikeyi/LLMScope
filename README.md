@@ -15,7 +15,7 @@ The repository started as a scaffold, but the core runtime and observation stack
 - `packages/storage-memory`: in-memory session store
 - `packages/storage-sqlite`: persistent SQLite session store
 
-Today, the main usable path is a config-driven local proxy with observation API, CLI inspection commands, and a runnable read-only web UI.
+Today, the main usable path is a config-driven local proxy with observation API, CLI inspection/export commands, and a runnable read-only web UI.
 
 ## Phased implementation plan
 
@@ -65,18 +65,18 @@ Delivered so far:
 - config file loading plus env and CLI overrides
 - SQLite persistence
 - privacy/redaction modes
-- doctor checks and CLI management commands
+- doctor checks and CLI management commands, including export
 
 Still planned:
 
 - real-time UI updates
 - better filtering/search
-- export/replay/diff workflows
+- replay/diff workflows
 - packaging, CI, and release hardening
 
 ## CLI usage
 
-The CLI starts a local proxy, serves the observation API, and provides non-long-running inspection commands.
+The CLI starts a local proxy, serves the observation API, and provides non-long-running inspection and export commands.
 
 ### Start the CLI
 
@@ -178,6 +178,20 @@ node apps/cli/dist/index.js show --host 127.0.0.1 --ui-port 8788 --session-id <s
 ```
 
 This prints the full captured `Session` JSON, including request, response, normalized fields, warnings, and stream events when present.
+
+Export one session as JSON to stdout:
+
+```bash
+node apps/cli/dist/index.js export --host 127.0.0.1 --ui-port 8788 --session-id <session-id>
+```
+
+Export filtered sessions to a file:
+
+```bash
+node apps/cli/dist/index.js export --host 127.0.0.1 --ui-port 8788 --status completed --format ndjson --output ./exports/sessions.ndjson
+```
+
+`export` writes full `Session` records, not summary rows. Supported formats are `json` and `ndjson`; `json` is the default. When `--output` is omitted, the payload is written to stdout.
 
 You can still clear captured sessions through the observation API helper command:
 

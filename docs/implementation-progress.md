@@ -1,6 +1,6 @@
 # LLMScope 项目实现与进度跟踪
 
-> 最后更新：2026-03-22
+> 最后更新：2026-03-23
 >
 > 用途：作为当前仓库实现状态的快照文档，持续跟踪“已经做了什么、还缺什么、下一步做什么”。
 
@@ -8,7 +8,7 @@
 
 - 项目目前处于**可运行本地代理 MVP + 只读观测面已成型，正在进入运行时与产品硬化阶段**。
 - 已有真实实现的重点在 `packages/shared-types`、`packages/core`、`packages/config`、`packages/storage-memory`、`packages/storage-sqlite`、`packages/proxy-engine`、`apps/cli`、`apps/web`。
-- `apps/cli` 已具备完整的最小控制面：`start`、`doctor`、`list`、`show`、`clear`，并持续暴露 observation API。
+- `apps/cli` 已具备完整的最小控制面：`start`、`doctor`、`list`、`show`、`clear`、`export`，并持续暴露 observation API。
 - `apps/web` 已具备**可运行的只读 observation UI**：支持会话列表、筛选、详情、标准化结果、错误态和流事件展示。
 - `packages/config` 已从“类型与默认值”升级为**默认配置文件发现、配置文件加载、环境变量覆盖、CLI override、运行时校验和 `ResolvedConfig` 组装链路**。
 - Provider 识别、请求/响应/流标准化、基础隐私脱敏和 SQLite 持久化都已经进入可运行状态，但相关能力仍主要内嵌在现有包内，尚未按最初架构拆分为独立包。
@@ -28,7 +28,7 @@
 当前自动化校验覆盖情况：
 
 - 有测试的模块：`packages/shared-types`、`packages/core`、`packages/config`、`packages/storage-memory`、`packages/storage-sqlite`、`packages/proxy-engine`、`apps/cli`、`apps/web`
-- 当前测试重点已覆盖：Provider 匹配与标准化、代理引擎请求/响应/SSE、隐私模式脱敏、CLI observation API、CLI `list/show/clear`、Web observation UI、内存存储与 SQLite 存储
+- 当前测试重点已覆盖：Provider 匹配与标准化、代理引擎请求/响应/SSE、隐私模式脱敏、CLI observation API、CLI `list/show/clear/export`、Web observation UI、内存存储与 SQLite 存储
 - 当前测试基线：`pnpm test` 与 `pnpm typecheck` 均已通过，可作为后续开发基线
 
 ## 3. 当前实现清单
@@ -41,7 +41,7 @@
 | `packages/storage-memory` | 已实现                 | 内存 Session Store、增删改查、流事件追加、列表筛选、LRU 淘汰                                                                 | 具备 MVP 运行所需能力                                            |
 | `packages/storage-sqlite` | 已实现                 | SQLite Session Store、会话持久化、流事件追加、筛选查询、LRU 淘汰                                                             | 已落地，不再只是规划项                                           |
 | `packages/proxy-engine`   | 已实现（MVP 核心）     | Node HTTP 代理、静态路由、请求/响应抓取、Session 持久化、SSE 透传与事件累积、Provider 匹配、请求/响应/流标准化、基础隐私脱敏 | 目前是项目最成熟的核心包                                         |
-| `apps/cli`                | 已实现（MVP 控制面）   | CLI 参数解析、代理启动/停止、Session 摘要输出、observation API、启动失败回滚、优雅退出、`doctor`、`list`、`show`、`clear`   | 已经是当前主入口，不再是 scaffold                                |
+| `apps/cli`                | 已实现（MVP 控制面）   | CLI 参数解析、代理启动/停止、Session 摘要输出、observation API、启动失败回滚、优雅退出、`doctor`、`list`、`show`、`clear`、`export` | 已经是当前主入口，不再是 scaffold                                |
 | `apps/web`                | 已实现（只读观察面）   | observation UI 数据加载、筛选参数归一化、会话列表、详情页、原始请求/响应展示、normalized exchange、stream events 展示        | 已可作为只读观察页，但还不是完整交互式 Web 应用                  |
 
 ## 4. 与路线图对照
@@ -139,13 +139,12 @@
 - [x] `apps/cli` 暴露 `health` / `sessions` / `session detail` observation API
 - [x] `apps/cli` 暴露 session delete / clear all write API
 - [x] `apps/cli` 提供 `doctor`
-- [x] `apps/cli` 提供 `list` / `show` / `clear`
+- [x] `apps/cli` 提供 `list` / `show` / `clear` / `export`
 - [x] `apps/web` 只读 observation UI
 - [x] 会话列表 / 详情页 / 筛选的最小只读形态
 
 **部分完成**
 
-- [~] `apps/cli` 具备最小多命令能力，但仍缺 `export` 等更完整管理命令
 - [~] `apps/web` 目前为服务端渲染 HTML 的只读观察页，尚未进入完整前端应用形态
 
 **未完成**
@@ -153,7 +152,7 @@
 - [ ] `apps/web` 完整页面与状态管理
 - [ ] WebSocket / SSE 实时推送到 UI
 - [ ] 更完整的空状态 / 错误状态 / 交互式刷新与导航
-- [ ] `apps/cli` 导出与更完整管理命令
+- [ ] `apps/cli` replay / diff 等更完整管理命令
 
 ### Phase E：增强与发布
 
@@ -170,10 +169,10 @@
 按影响优先级排序，当前最值得优先补齐的是：
 
 1. **配置与运行时硬化仍需继续推进**  
-   统一配置链路、默认配置发现和命令级测试已经打通，但仍缺更高层的 smoke verification、导出命令和发布前运行文档，离“开箱即用”还有最后一段距离。
+   统一配置链路、默认配置发现、命令级测试和 CLI `export` 已经打通，但仍缺更高层的 dist smoke verification 与发布前运行文档，离“开箱即用”还有最后一段距离。
 
 2. **应用层仍缺真正的“可操作产品表面”**  
-   用户已经能看数据和清理数据，但还不能方便地导出、对比、实时刷新、长期管理或通过更完整 Web 应用交互使用。
+   用户已经能看数据、清理数据并导出数据，但还不能方便地对比、实时刷新、长期管理或通过更完整 Web 应用交互使用。
 
 3. **架构拆分还没有完成**  
    `provider-registry`、`parser-sse`、`redaction` 等能力虽然“事实上存在”，但还没有按最初设计独立成包，不利于后续扩展与维护。
@@ -192,15 +191,14 @@
 ### 第一优先级：产品可用性
 
 - 收紧 `ResolvedConfig` 到各命令的落地路径
-- 为配置驱动启动、检查和观测命令补充更强测试
+- 为配置驱动启动、检查、观测和导出命令补充更强测试
 - 为 dist 产物补充更直接的 smoke verification
-- 继续为 `apps/cli` 增加 `export` 等更完整的管理命令
 - 让 `apps/web` 从只读观察页继续演进到最小可用交互界面
 
 ### 第二优先级：应用层增强
 
 - 增加会话刷新、筛选增强、选中状态同步
-- 增加导出能力
+- 在现有导出能力之上增加 replay / diff 等后续工作流
 - 视需要增加实时推送
 - 明确 SQLite 持久化作为默认可选运行模式
 
@@ -227,6 +225,6 @@
 当下面 4 件事完成后，可以把项目状态从“后端 MVP + 最小观察面”升级为“最小可用产品”：
 
 - [x] 配置驱动的启动、检查和观测命令具备稳定默认路径与说明文档
-- [ ] CLI 至少具备 `start` + `doctor` + `export` 或同等可用命令面（`list` / `show` / `clear` 已完成）
+- [x] CLI 至少具备 `start` + `doctor` + `export` 或同等可用命令面（`list` / `show` / `clear` 已完成）
 - [ ] Web 从只读观察页升级为最小可交互应用
 - [ ] 至少一种持久化运行模式（如 SQLite）能顺畅用于日常本地使用
