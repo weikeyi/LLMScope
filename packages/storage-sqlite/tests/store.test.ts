@@ -54,7 +54,9 @@ const createSession = (overrides: Partial<Session> = {}): Session => ({
           stream: false,
         },
       }),
-  ...(overrides.streamEvents !== undefined ? { streamEvents: overrides.streamEvents } : {}),
+  ...(overrides.streamEvents !== undefined
+    ? { streamEvents: overrides.streamEvents }
+    : {}),
   ...(overrides.warnings !== undefined ? { warnings: overrides.warnings } : {}),
   ...(overrides.error !== undefined ? { error: overrides.error } : {}),
 });
@@ -156,16 +158,54 @@ describe('SqliteSessionStore', () => {
         }),
       );
 
-      await expect(store.listSessions({ provider: 'anthropic' })).resolves.toEqual([
+      await expect(
+        store.listSessions({ provider: 'anthropic' }),
+      ).resolves.toEqual([
         expect.objectContaining({
           id: 'session-2',
           provider: 'anthropic',
           model: 'claude-3-7-sonnet',
         }),
       ]);
-      await expect(store.listSessions({ search: '/v1/chat' })).resolves.toEqual([
-        expect.objectContaining({ id: 'session-1' }),
+      await expect(store.listSessions({ search: '/v1/chat' })).resolves.toEqual(
+        [expect.objectContaining({ id: 'session-1' })],
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+  it('returns newest-first summaries and respects limit and detail lookup semantics', async () => {
+    const store = new SqliteSessionStore({ filePath: createTempDbPath() });
+
+    try {
+      await store.saveSession(
+        createSession({
+          id: 'session-1',
+          startedAt: '2025-01-01T00:00:00.000Z',
+        }),
+      );
+      await store.saveSession(
+        createSession({
+          id: 'session-2',
+          startedAt: '2025-01-02T00:00:00.000Z',
+        }),
+      );
+      await store.saveSession(
+        createSession({
+          id: 'session-3',
+          startedAt: '2025-01-03T00:00:00.000Z',
+        }),
+      );
+
+      await expect(store.listSessions({ limit: 2 })).resolves.toEqual([
+        expect.objectContaining({ id: 'session-3' }),
+        expect.objectContaining({ id: 'session-2' }),
       ]);
+      await expect(store.getSession('session-2')).resolves.toMatchObject({
+        id: 'session-2',
+      });
+      await expect(store.getSession('missing')).resolves.toBeNull();
     } finally {
       store.close();
     }

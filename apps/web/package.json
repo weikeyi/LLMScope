@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
+  "bin": {
+    "llmscope-web": "./dist/index.js"
+  },
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -18,4 +21,3 @@
     "lint": "eslint src"
   }
 }
-

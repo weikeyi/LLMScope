@@ -1,0 +1,20 @@
+proxy:
+  host: 127.0.0.1
+  port: 8787
+
+ui:
+  enabled: true
+  port: 8788
+
+storage:
+  mode: sqlite
+  sqlite:
+    filePath: ./data/llmscope.db
+
+privacy:
+  mode: balanced
+
+routes:
+  - id: default
+    targetBaseUrl: https://api.openai.com
+    rewriteHost: true

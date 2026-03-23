@@ -16,7 +16,9 @@ import {
   toTextParts,
 } from './openai-chat-completions.js';
 
-const toInstructionMessages = (value: unknown): CanonicalMessage[] | undefined => {
+const toInstructionMessages = (
+  value: unknown,
+): CanonicalMessage[] | undefined => {
   if (typeof value !== 'string') {
     return undefined;
   }
@@ -76,7 +78,9 @@ const toInputMessages = (input: unknown): CanonicalMessage[] | undefined => {
   return [toInputMessage(input)];
 };
 
-const toOutputMessage = (item: Record<string, unknown>): CanonicalMessage | undefined => {
+const toOutputMessage = (
+  item: Record<string, unknown>,
+): CanonicalMessage | undefined => {
   if (item.type !== 'message') {
     return undefined;
   }
@@ -93,18 +97,26 @@ const toOutputMessages = (output: unknown): CanonicalMessage[] | undefined => {
     return undefined;
   }
 
-  const messages = output.filter(isRecord).map((item) => toOutputMessage(item)).filter((item) => item !== undefined);
+  const messages = output
+    .filter(isRecord)
+    .map((item) => toOutputMessage(item))
+    .filter((item) => item !== undefined);
   return messages.length > 0 ? messages : undefined;
 };
 
-const toOutputText = (output: CanonicalMessage[] | undefined): string | undefined => {
+const toOutputText = (
+  output: CanonicalMessage[] | undefined,
+): string | undefined => {
   if (output === undefined) {
     return undefined;
   }
 
   const text = output
     .flatMap((message) => message.parts)
-    .filter((part): part is Extract<CanonicalPart, { type: 'text' }> => part.type === 'text')
+    .filter(
+      (part): part is Extract<CanonicalPart, { type: 'text' }> =>
+        part.type === 'text',
+    )
     .map((part) => part.text)
     .join('');
 
@@ -127,12 +139,17 @@ const toResponseUsage = (value: unknown): CanonicalUsage | undefined => {
     return usage;
   }
 
-  if (typeof value.input_tokens === 'number' && typeof value.output_tokens === 'number') {
+  if (
+    typeof value.input_tokens === 'number' &&
+    typeof value.output_tokens === 'number'
+  ) {
     return {
       inputTokens: value.input_tokens,
       outputTokens: value.output_tokens,
       totalTokens:
-        typeof value.total_tokens === 'number' ? value.total_tokens : value.input_tokens + value.output_tokens,
+        typeof value.total_tokens === 'number'
+          ? value.total_tokens
+          : value.input_tokens + value.output_tokens,
     };
   }
 
@@ -155,7 +172,10 @@ export const openAiResponsesPlugin: ProviderPlugin = {
     let confidence = 0.8;
     const reasons = ['matched POST /v1/responses'];
 
-    if (isRecord(ctx.requestBody) && typeof ctx.requestBody.model === 'string') {
+    if (
+      isRecord(ctx.requestBody) &&
+      typeof ctx.requestBody.model === 'string'
+    ) {
       confidence += 0.1;
       reasons.push('found model field');
     }
@@ -237,6 +257,10 @@ export const openAiResponsesPlugin: ProviderPlugin = {
       exchange.toolChoice = body.tool_choice;
     }
 
+    if (body.response_format !== undefined) {
+      exchange.responseFormat = body.response_format;
+    }
+
     if (body.text !== undefined) {
       exchange.responseFormat = body.text;
     }
@@ -308,15 +332,17 @@ export const openAiResponsesPlugin: ProviderPlugin = {
     }
 
     if (!isRecord(ctx.rawJson)) {
-      return toParsedStreamEvent(
-        createStreamEventBase(ctx, 'unknown'),
-        ['Unhandled OpenAI responses SSE event shape.'],
-      );
+      return toParsedStreamEvent(createStreamEventBase(ctx, 'unknown'), [
+        'Unhandled OpenAI responses SSE event shape.',
+      ]);
     }
 
     if (ctx.rawJson.type === 'response.created') {
       const normalized: { status?: string } = {};
-      if (isRecord(ctx.rawJson.response) && typeof ctx.rawJson.response.status === 'string') {
+      if (
+        isRecord(ctx.rawJson.response) &&
+        typeof ctx.rawJson.response.status === 'string'
+      ) {
         normalized.status = ctx.rawJson.response.status;
       }
 
@@ -327,7 +353,10 @@ export const openAiResponsesPlugin: ProviderPlugin = {
       } as Parameters<typeof toParsedStreamEvent>[0]);
     }
 
-    if (ctx.rawJson.type === 'response.output_text.delta' && typeof ctx.rawJson.delta === 'string') {
+    if (
+      ctx.rawJson.type === 'response.output_text.delta' &&
+      typeof ctx.rawJson.delta === 'string'
+    ) {
       return toParsedStreamEvent({
         ...createStreamEventBase(ctx, 'delta'),
         rawJson: ctx.rawJson,
@@ -374,7 +403,10 @@ export const openAiResponsesPlugin: ProviderPlugin = {
 
     if (ctx.rawJson.type === 'response.completed') {
       const normalized: { done: true; status?: string } = { done: true };
-      if (isRecord(ctx.rawJson.response) && typeof ctx.rawJson.response.status === 'string') {
+      if (
+        isRecord(ctx.rawJson.response) &&
+        typeof ctx.rawJson.response.status === 'string'
+      ) {
         normalized.status = ctx.rawJson.response.status;
       }
 
@@ -389,7 +421,9 @@ export const openAiResponsesPlugin: ProviderPlugin = {
       return toParsedStreamEvent({
         ...createStreamEventBase(ctx, 'error'),
         rawJson: ctx.rawJson,
-        normalized: isRecord(ctx.rawJson.error) ? ctx.rawJson.error : ctx.rawJson,
+        normalized: isRecord(ctx.rawJson.error)
+          ? ctx.rawJson.error
+          : ctx.rawJson,
       } as Parameters<typeof toParsedStreamEvent>[0]);
     }
 

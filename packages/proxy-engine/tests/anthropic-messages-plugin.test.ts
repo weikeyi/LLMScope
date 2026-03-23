@@ -280,7 +280,7 @@ describe('anthropicMessagesPlugin', () => {
       eventId: 'event-4',
       sequence: 3,
       eventName: 'content_block_delta',
-      rawLine: '{"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"N"}}',
+      rawLine: String.raw`{"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"N"}}`,
       rawJson: { delta: { type: 'input_json_delta', partial_json: '{"city":"N' } },
     });
     const usage = anthropicMessagesPlugin.parseStreamEvent?.({
@@ -357,7 +357,7 @@ describe('anthropicMessagesPlugin', () => {
         sessionId: 'session-1',
         ts: expect.any(Number),
         eventType: 'tool_call_delta',
-        rawLine: '{"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"N"}}',
+        rawLine: String.raw`{"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"N"}}`,
         rawJson: { delta: { type: 'input_json_delta', partial_json: '{"city":"N' } },
         normalized: { arguments: '{"city":"N' },
       },

@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import type { TLSSocket } from 'node:tls';
 import { Readable } from 'node:stream';
 
@@ -25,7 +30,11 @@ import type {
   Session,
 } from '@llmscope/shared-types';
 
-export { anthropicMessagesPlugin, openAiChatCompletionsPlugin, openAiResponsesPlugin } from './providers/index.js';
+export {
+  anthropicMessagesPlugin,
+  openAiChatCompletionsPlugin,
+  openAiResponsesPlugin,
+} from './providers/index.js';
 
 export interface ProxyEngineOptions {
   host?: string;
@@ -55,6 +64,7 @@ interface MatchedProvider {
   provider: string;
   apiStyle: string;
   confidence: number;
+  reasons: string[];
 }
 
 interface StreamEventParseContext {
@@ -68,14 +78,25 @@ interface PrivacyPolicy {
   redactImages: boolean;
 }
 
-const TEXT_CONTENT_TYPES = ['application/json', 'application/problem+json', 'text/', 'application/xml'];
+const TEXT_CONTENT_TYPES = [
+  'application/json',
+  'application/problem+json',
+  'text/',
+  'application/xml',
+];
 
 const DEFAULT_CAPTURE_BODY_BYTES = 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_SESSIONS = 100;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const REDACTED_TEXT = '[redacted]';
 const REDACTED_IMAGE_URL = 'data:,redacted';
-const SENSITIVE_HEADERS = new Set(['authorization', 'proxy-authorization', 'cookie', 'set-cookie', 'x-api-key']);
+const SENSITIVE_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'x-api-key',
+]);
 const STRICT_TEXT_PATH_SEGMENTS = new Set([
   'content',
   'text',
@@ -145,10 +166,15 @@ const isSensitivePath = (path: string[]): boolean => {
 };
 
 const shouldRedactStrictText = (path: string[]): boolean => {
-  return path.some((segment) => STRICT_TEXT_PATH_SEGMENTS.has(segment.toLowerCase()));
+  return path.some((segment) =>
+    STRICT_TEXT_PATH_SEGMENTS.has(segment.toLowerCase()),
+  );
 };
 
-const applyRedactionReplacement = (value: unknown, replacement: unknown): unknown => {
+const applyRedactionReplacement = (
+  value: unknown,
+  replacement: unknown,
+): unknown => {
   if (value === undefined) {
     return value;
   }
@@ -173,7 +199,11 @@ const redactValue = (
       return applyRedactionReplacement(value, REDACTED_TEXT);
     }
 
-    if (policy.redactImages && path.at(-1)?.toLowerCase() === 'url' && path.includes('image_url')) {
+    if (
+      policy.redactImages &&
+      path.at(-1)?.toLowerCase() === 'url' &&
+      path.includes('image_url')
+    ) {
       warnings.push(`Redacted image URL at ${path.join('.')}.`);
       return applyRedactionReplacement(value, REDACTED_IMAGE_URL);
     }
@@ -182,7 +212,9 @@ const redactValue = (
   }
 
   if (Array.isArray(value)) {
-    return value.map((item, index) => redactValue(item, [...path, String(index)], policy, warnings));
+    return value.map((item, index) =>
+      redactValue(item, [...path, String(index)], policy, warnings),
+    );
   }
 
   if (isRecord(value)) {
@@ -232,15 +264,31 @@ const redactMessage = (
     headers: redactHeaders(message.headers, policy, warnings),
   };
 
-  if (message.bodyText !== undefined && policy.redactSensitiveText && target === 'response') {
-    nextMessage.bodyText = redactValue(message.bodyText, [target, 'bodyText'], policy, warnings) as string;
+  if (
+    message.bodyText !== undefined &&
+    policy.redactSensitiveText &&
+    target === 'response'
+  ) {
+    nextMessage.bodyText = redactValue(
+      message.bodyText,
+      [target, 'bodyText'],
+      policy,
+      warnings,
+    ) as string;
   }
 
   if (message.bodyJson !== undefined) {
-    nextMessage.bodyJson = redactValue(cloneValue(message.bodyJson), [target, 'bodyJson'], policy, warnings);
+    nextMessage.bodyJson = redactValue(
+      cloneValue(message.bodyJson),
+      [target, 'bodyJson'],
+      policy,
+      warnings,
+    );
   }
 
-  return warnings.length === 0 ? { message: nextMessage } : { message: nextMessage, warnings };
+  return warnings.length === 0
+    ? { message: nextMessage }
+    : { message: nextMessage, warnings };
 };
 
 const redactStreamEvent = (
@@ -253,18 +301,35 @@ const redactStreamEvent = (
   };
 
   if (event.rawLine !== undefined && policy.redactSensitiveText) {
-    nextEvent.rawLine = redactValue(event.rawLine, ['stream-event', 'rawLine'], policy, warnings) as string;
+    nextEvent.rawLine = redactValue(
+      event.rawLine,
+      ['stream-event', 'rawLine'],
+      policy,
+      warnings,
+    ) as string;
   }
 
   if (event.rawJson !== undefined) {
-    nextEvent.rawJson = redactValue(cloneValue(event.rawJson), ['stream-event', 'rawJson'], policy, warnings);
+    nextEvent.rawJson = redactValue(
+      cloneValue(event.rawJson),
+      ['stream-event', 'rawJson'],
+      policy,
+      warnings,
+    );
   }
 
   if (event.normalized !== undefined) {
-    nextEvent.normalized = redactValue(cloneValue(event.normalized), ['stream-event', 'normalized'], policy, warnings);
+    nextEvent.normalized = redactValue(
+      cloneValue(event.normalized),
+      ['stream-event', 'normalized'],
+      policy,
+      warnings,
+    );
   }
 
-  return warnings.length === 0 ? { event: nextEvent } : { event: nextEvent, warnings };
+  return warnings.length === 0
+    ? { event: nextEvent }
+    : { event: nextEvent, warnings };
 };
 
 const isTextContentType = (contentType?: string): boolean => {
@@ -291,10 +356,13 @@ const toHeaderRecord = (
   return normalized;
 };
 
-const toIncomingRequestMeta = (request: IncomingMessage): IncomingRequestMeta => {
+const toIncomingRequestMeta = (
+  request: IncomingMessage,
+): IncomingRequestMeta => {
   const host = request.headers.host ?? '127.0.0.1';
   const url = request.url ?? '/';
-  const protocol = (request.socket as TLSSocket).encrypted === true ? 'https' : 'http';
+  const protocol =
+    (request.socket as TLSSocket).encrypted === true ? 'https' : 'http';
   const absoluteUrl = new URL(url, `${protocol}://${host}`);
 
   const meta: IncomingRequestMeta = {
@@ -306,9 +374,9 @@ const toIncomingRequestMeta = (request: IncomingMessage): IncomingRequestMeta =>
     headers: toHeaderRecord(request.headers),
   };
 
-  const queryEntries = Array.from(new Set(Array.from(absoluteUrl.searchParams.keys()))).map(
-    (key) => [key, absoluteUrl.searchParams.getAll(key)] as const,
-  );
+  const queryEntries = Array.from(
+    new Set(Array.from(absoluteUrl.searchParams.keys())),
+  ).map((key) => [key, absoluteUrl.searchParams.getAll(key)] as const);
 
   if (queryEntries.length > 0) {
     meta.query = Object.fromEntries(queryEntries);
@@ -388,7 +456,10 @@ const captureBody = (
   return result;
 };
 
-const mergeWarnings = (existing: string[] | undefined, warnings: string[] | undefined): string[] | undefined => {
+const mergeWarnings = (
+  existing: string[] | undefined,
+  warnings: string[] | undefined,
+): string[] | undefined => {
   if (warnings === undefined || warnings.length === 0) {
     return existing;
   }
@@ -438,7 +509,10 @@ const mergeExchange = (
   return next as CanonicalExchange;
 };
 
-const assignNormalized = (session: Session, exchange: CanonicalExchange | undefined): void => {
+const assignNormalized = (
+  session: Session,
+  exchange: CanonicalExchange | undefined,
+): void => {
   if (exchange === undefined) {
     delete session.normalized;
     return;
@@ -447,7 +521,10 @@ const assignNormalized = (session: Session, exchange: CanonicalExchange | undefi
   session.normalized = exchange;
 };
 
-const assignWarnings = (session: Session, warnings: string[] | undefined): void => {
+const assignWarnings = (
+  session: Session,
+  warnings: string[] | undefined,
+): void => {
   if (warnings === undefined) {
     delete session.warnings;
     return;
@@ -472,7 +549,10 @@ const applyRequestParsing = (
   assignWarnings(session, mergeWarnings(session.warnings, result.warnings));
 };
 
-const applyResponseParsing = (session: Session, result: ParsedResponseResult): void => {
+const applyResponseParsing = (
+  session: Session,
+  result: ParsedResponseResult,
+): void => {
   assignNormalized(session, mergeExchange(session.normalized, result.exchange));
   assignWarnings(session, mergeWarnings(session.warnings, result.warnings));
 
@@ -493,7 +573,10 @@ const parseJsonIfPossible = (dataText: string): unknown => {
   }
 };
 
-const toGenericStreamEvent = (sessionId: string, message: SseMessage): CanonicalStreamEvent => {
+const toGenericStreamEvent = (
+  sessionId: string,
+  message: SseMessage,
+): CanonicalStreamEvent => {
   const dataText = message.data.join('\n');
   const normalized = dataText === '[DONE]' ? { done: true } : undefined;
 
@@ -553,13 +636,15 @@ const selectProviderPlugin = (
     if (
       bestMatch === undefined ||
       result.confidence > bestMatch.confidence ||
-      (result.confidence === bestMatch.confidence && plugin.id < bestMatch.plugin.id)
+      (result.confidence === bestMatch.confidence &&
+        plugin.id < bestMatch.plugin.id)
     ) {
       bestMatch = {
         plugin,
         provider: result.provider,
         apiStyle: result.apiStyle,
         confidence: result.confidence,
+        reasons: result.reasons,
       };
     }
   }
@@ -617,7 +702,9 @@ class SseAccumulator {
       }
     }
 
-    return message.data.length === 0 && message.event === undefined ? null : message;
+    return message.data.length === 0 && message.event === undefined
+      ? null
+      : message;
   }
 }
 
@@ -694,8 +781,10 @@ export class NodeProxyEngine implements ProxyEngine {
     this.mode = options.mode ?? 'gateway';
     this.maxConcurrentSessions =
       options.maxConcurrentSessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    this.captureBodyBytes = options.captureBodyBytes ?? DEFAULT_CAPTURE_BODY_BYTES;
+    this.requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.captureBodyBytes =
+      options.captureBodyBytes ?? DEFAULT_CAPTURE_BODY_BYTES;
     this.privacyPolicy = toPrivacyPolicy(options.privacy);
     this.routeResolver = options.routeResolver;
     this.store = options.store;
@@ -747,7 +836,11 @@ export class NodeProxyEngine implements ProxyEngine {
   public getAddress(): ProxyEngineAddress {
     const address = this.server?.address();
 
-    if (address === null || address === undefined || typeof address === 'string') {
+    if (
+      address === null ||
+      address === undefined ||
+      typeof address === 'string'
+    ) {
       return {
         host: this.host,
         port: this.port,
@@ -807,11 +900,22 @@ export class NodeProxyEngine implements ProxyEngine {
       requestBodyBuffer = await readRequestBody(request);
       session.request = {
         headers: toHeaderRecord(request.headers),
-        ...captureBody(requestBodyBuffer, requestMeta.contentType, this.captureBodyBytes),
+        ...captureBody(
+          requestBodyBuffer,
+          requestMeta.contentType,
+          this.captureBodyBytes,
+        ),
       };
-      const redactedRequest = redactMessage(session.request, 'request', this.privacyPolicy);
+      const redactedRequest = redactMessage(
+        session.request,
+        'request',
+        this.privacyPolicy,
+      );
       session.request = redactedRequest.message;
-      assignWarnings(session, mergeWarnings(session.warnings, redactedRequest.warnings));
+      assignWarnings(
+        session,
+        mergeWarnings(session.warnings, redactedRequest.warnings),
+      );
 
       const matchedProvider = selectProviderPlugin(this.providerPlugins, {
         request: requestMeta,
@@ -826,6 +930,13 @@ export class NodeProxyEngine implements ProxyEngine {
           confidence: matchedProvider.confidence,
         };
 
+        if (matchedProvider.confidence < 1.0) {
+          session.warnings = [
+            ...(session.warnings ?? []),
+            `Provider plugin '${matchedProvider.plugin.id}' matched with low confidence (${matchedProvider.confidence}): ${matchedProvider.reasons.join(', ')}`,
+          ];
+        }
+
         applyRequestParsing(
           session,
           matchedProvider.plugin.parseRequest({
@@ -837,6 +948,11 @@ export class NodeProxyEngine implements ProxyEngine {
             apiStyle: matchedProvider.apiStyle,
           },
         );
+      } else {
+        session.warnings = [
+          ...(session.warnings ?? []),
+          'No known provider plugin matched this request; raw traffic recorded without provider-specific normalization.',
+        ];
       }
 
       await this.store.saveSession(session);
@@ -849,7 +965,10 @@ export class NodeProxyEngine implements ProxyEngine {
         upstreamBaseUrl: resolvedRoute.targetBaseUrl,
       };
 
-      const upstreamUrl = new URL(request.url ?? '/', resolvedRoute.targetBaseUrl);
+      const upstreamUrl = new URL(
+        request.url ?? '/',
+        resolvedRoute.targetBaseUrl,
+      );
       const upstreamUrlString = upstreamUrl.toString();
       const upstreamHeaders = omitHeaders(
         toHeaderRecord(request.headers),
@@ -869,33 +988,30 @@ export class NodeProxyEngine implements ProxyEngine {
         abortController.abort();
       }, this.requestTimeoutMs);
 
-      const upstreamRequest = {
-        method: request.method ?? 'GET',
-        headers: upstreamHeaders,
-        signal: abortController.signal,
-        body:
-          requestBodyBuffer.byteLength === 0 || request.method === 'GET'
-            ? null
-            : requestBodyBuffer,
-      };
+      const upstreamMethod = request.method ?? 'GET';
+      const upstreamRequestBody =
+        requestBodyBuffer.byteLength === 0 || request.method === 'GET'
+          ? null
+          : requestBodyBuffer;
 
       const upstreamResponse = await fetch(upstreamUrlString, {
-        method: request.method ?? 'GET',
+        method: upstreamMethod,
         headers: upstreamHeaders,
         signal: abortController.signal,
-        body:
-          requestBodyBuffer.byteLength === 0 || request.method === 'GET'
-            ? null
-            : requestBodyBuffer,
+        body: upstreamRequestBody,
         duplex: 'half',
       });
 
       clearTimeout(timeout);
 
       const responseHeaders = Object.fromEntries(
-        Array.from(upstreamResponse.headers.entries()).map(([key, value]) => [key, value]),
+        Array.from(upstreamResponse.headers.entries()).map(([key, value]) => [
+          key,
+          value,
+        ]),
       );
-      const responseContentType = upstreamResponse.headers.get('content-type') ?? undefined;
+      const responseContentType =
+        upstreamResponse.headers.get('content-type') ?? undefined;
       const isSse = responseContentType?.includes('text/event-stream') ?? false;
       const firstByteAt = Date.now() - startedAt.getTime();
 
@@ -916,7 +1032,9 @@ export class NodeProxyEngine implements ProxyEngine {
       if (upstreamBody === null) {
         response.end();
       } else {
-        for await (const chunk of Readable.fromWeb(upstreamBody as globalThis.ReadableStream<Uint8Array>)) {
+        for await (const chunk of Readable.fromWeb(
+          upstreamBody as globalThis.ReadableStream<Uint8Array>,
+        )) {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           responseChunks.push(buffer);
           response.write(buffer);
@@ -932,16 +1050,29 @@ export class NodeProxyEngine implements ProxyEngine {
                 },
                 matchedProvider,
               );
-              const redactedEvent = redactStreamEvent(parsedEvent.event, this.privacyPolicy);
+              const redactedEvent = redactStreamEvent(
+                parsedEvent.event,
+                this.privacyPolicy,
+              );
               streamSequence += 1;
-              session.streamEvents = [...(session.streamEvents ?? []), redactedEvent.event];
-              assignWarnings(session, mergeWarnings(session.warnings, parsedEvent.warnings));
-              assignWarnings(session, mergeWarnings(session.warnings, redactedEvent.warnings));
+              session.streamEvents = [
+                ...(session.streamEvents ?? []),
+                redactedEvent.event,
+              ];
+              assignWarnings(
+                session,
+                mergeWarnings(session.warnings, parsedEvent.warnings),
+              );
+              assignWarnings(
+                session,
+                mergeWarnings(session.warnings, redactedEvent.warnings),
+              );
               assignNormalized(
                 session,
                 mergeExchange(
                   session.normalized,
-                  parsedEvent.warnings === undefined && redactedEvent.warnings === undefined
+                  parsedEvent.warnings === undefined &&
+                    redactedEvent.warnings === undefined
                     ? undefined
                     : {
                         warnings: [
@@ -951,7 +1082,10 @@ export class NodeProxyEngine implements ProxyEngine {
                       },
                 ),
               );
-              await this.store.appendStreamEvent(sessionId, redactedEvent.event);
+              await this.store.appendStreamEvent(
+                sessionId,
+                redactedEvent.event,
+              );
             }
           }
         }
@@ -963,11 +1097,22 @@ export class NodeProxyEngine implements ProxyEngine {
       const responseBody = Buffer.concat(responseChunks);
       session.response = {
         headers: responseHeaders,
-        ...captureBody(responseBody, responseContentType, this.captureBodyBytes),
+        ...captureBody(
+          responseBody,
+          responseContentType,
+          this.captureBodyBytes,
+        ),
       };
-      const redactedResponse = redactMessage(session.response, 'response', this.privacyPolicy);
+      const redactedResponse = redactMessage(
+        session.response,
+        'response',
+        this.privacyPolicy,
+      );
       session.response = redactedResponse.message;
-      assignWarnings(session, mergeWarnings(session.warnings, redactedResponse.warnings));
+      assignWarnings(
+        session,
+        mergeWarnings(session.warnings, redactedResponse.warnings),
+      );
       session.status = 'completed';
       session.endedAt = endedAt.toISOString();
       session.transport.durationMs = endedAt.getTime() - startedAt.getTime();
@@ -997,9 +1142,15 @@ export class NodeProxyEngine implements ProxyEngine {
       this.emitSession(session);
 
       if (response.headersSent === false) {
-        response.statusCode = inspectorError.code === 'TOO_MANY_CONCURRENT_SESSIONS' ? 429 : 502;
+        response.statusCode =
+          inspectorError.code === 'TOO_MANY_CONCURRENT_SESSIONS' ? 429 : 502;
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ error: inspectorError.message, code: inspectorError.code }));
+        response.end(
+          JSON.stringify({
+            error: inspectorError.message,
+            code: inspectorError.code,
+          }),
+        );
       } else {
         response.end();
       }
@@ -1023,7 +1174,11 @@ export class NodeProxyEngine implements ProxyEngine {
         code: 'UPSTREAM_REQUEST_FAILED',
         phase: 'upstream',
         message: error.message,
-        details: { name: error.name, message: error.message, cause: error.cause },
+        details: {
+          name: error.name,
+          message: error.message,
+          cause: error.cause,
+        },
       };
     }
 

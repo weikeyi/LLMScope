@@ -1,11 +1,22 @@
 import { once } from 'node:events';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Session } from '@llmscope/shared-types';
 
-import { loadObservationPageData, renderObservationPage, toObservationFilters } from '../src/index.js';
+import {
+  createObservationUiServer,
+  loadObservationPageData,
+  parseObservationUiArgs,
+  renderObservationPage,
+  toObservationFilters,
+} from '../src/index.js';
 
 const startedServers: Array<{ close: () => Promise<void> }> = [];
 
@@ -145,27 +156,29 @@ const fixtureDetail: Session = {
 };
 
 const createObservationApiServer = async (): Promise<string> => {
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  const server = createServer(
+    (request: IncomingMessage, response: ServerResponse) => {
+      const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
-    if (url.pathname === '/api/sessions') {
-      response.statusCode = 200;
+      if (url.pathname === '/api/sessions') {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify(fixtureSessions));
+        return;
+      }
+
+      if (url.pathname === '/api/sessions/session-1') {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify(fixtureDetail));
+        return;
+      }
+
+      response.statusCode = 404;
       response.setHeader('content-type', 'application/json');
-      response.end(JSON.stringify(fixtureSessions));
-      return;
-    }
-
-    if (url.pathname === '/api/sessions/session-1') {
-      response.statusCode = 200;
-      response.setHeader('content-type', 'application/json');
-      response.end(JSON.stringify(fixtureDetail));
-      return;
-    }
-
-    response.statusCode = 404;
-    response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ error: 'Not found.' }));
-  });
+      response.end(JSON.stringify({ error: 'Not found.' }));
+    },
+  );
 
   const address = await listen(server);
   startedServers.push(address);
@@ -232,7 +245,7 @@ describe('@llmscope/web observation ui', () => {
         limit: 10,
       },
       selectedSessionId: 'session-1',
-      sessions: fixtureSessions,
+      sessions: [...fixtureSessions],
       selectedSession: fixtureDetail,
     });
 
@@ -242,6 +255,9 @@ describe('@llmscope/web observation ui', () => {
     expect(markup).toContain('Normalized exchange');
     expect(markup).toContain('Stream events');
     expect(markup).toContain('output_text');
+    expect(markup).toContain('Apply filters');
+    expect(markup).toContain('Loading observation UI...');
+    expect(markup).toContain('sessionId=session-1');
   });
 
   it('reports a missing selected session without failing the page load', async () => {
@@ -253,5 +269,67 @@ describe('@llmscope/web observation ui', () => {
 
     expect(data.selectedSession).toBeNull();
     expect(data.error).toContain('missing-session');
+  });
+
+  it('reports session loading failures as page errors', async () => {
+    const data = await loadObservationPageData({
+      apiBaseUrl: 'http://127.0.0.1:1',
+      selectedSessionId: 'session-1',
+    });
+
+    expect(data.sessions).toEqual([]);
+    expect(data.selectedSession).toBeNull();
+    expect(data.error).toContain(
+      'Could not load sessions from the observation API',
+    );
+  });
+
+  it('parses observation UI CLI arguments', () => {
+    expect(
+      parseObservationUiArgs([
+        '--api-base-url',
+        'http://127.0.0.1:8788',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '3001',
+      ]),
+    ).toEqual({
+      apiBaseUrl: 'http://127.0.0.1:8788/',
+      host: '0.0.0.0',
+      port: 3001,
+    });
+  });
+
+  it('serves the observation UI through the runtime entrypoint', async () => {
+    const apiBaseUrl = await createObservationApiServer();
+    const server = createObservationUiServer({
+      apiBaseUrl,
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    await server.start();
+
+    try {
+      const address = server.getAddress();
+      const response = await fetch(
+        `http://${address.host}:${address.port}/?status=completed&search=%2Fchat&sessionId=session-1`,
+      );
+      const html = await response.text();
+      const health = await fetch(
+        `http://${address.host}:${address.port}/health`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(html).toContain('LLMScope observation UI');
+      expect(html).toContain('session-1');
+      expect(html).toContain('Normalized exchange');
+      expect(html).toContain('Apply filters');
+      expect(health.status).toBe(200);
+      await expect(health.json()).resolves.toEqual({ ok: true });
+    } finally {
+      await server.stop();
+    }
   });
 });

@@ -2,7 +2,6 @@ import { accessSync, constants, mkdirSync } from 'node:fs';
 import {
   createServer,
   type IncomingMessage,
-  type Server,
   type ServerResponse,
 } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
@@ -29,13 +28,14 @@ import {
 import type {
   ListSessionsQuery,
   Session,
+  SessionSummary,
   SessionStatus,
 } from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
 import { SqliteSessionStore } from '@llmscope/storage-sqlite';
 
 export interface CliRuntimeOptions {
-  upstreamUrl: string;
+  upstreamUrl?: string;
   host?: string;
   port?: number;
   maxSessions?: number;
@@ -65,13 +65,38 @@ export interface ClearCommand {
   kind: 'clear';
   configFilePath?: string;
   target: {
-    host: string;
-    port: number;
+    host?: string;
+    port?: number;
   };
   sessionId?: string;
 }
 
-export type CliCommand = StartCommand | DoctorCommand | ClearCommand;
+export interface ListCommand {
+  kind: 'list';
+  configFilePath?: string;
+  target: {
+    host?: string;
+    port?: number;
+  };
+  query: ListSessionsQuery;
+}
+
+export interface ShowCommand {
+  kind: 'show';
+  configFilePath?: string;
+  target: {
+    host?: string;
+    port?: number;
+  };
+  sessionId: string;
+}
+
+export type CliCommand =
+  | StartCommand
+  | DoctorCommand
+  | ClearCommand
+  | ListCommand
+  | ShowCommand;
 
 export interface DoctorCheckResult {
   label: string;
@@ -102,17 +127,25 @@ const EXIT_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
 const generalUsage = [
   'Usage:',
-  '  llmscope-cli start --upstream <url> [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
+  '  llmscope-cli start [--upstream <url>] [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
   '  llmscope-cli doctor [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]',
+  '  llmscope-cli list [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
+  '  llmscope-cli show --session-id <id> [--config <path>] [--host <host>] [--ui-port <port>]',
   '  llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]',
   '',
 ].join('\n');
 
 const startUsage =
-  'Usage: llmscope-cli start --upstream <url> [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]';
+  'Usage: llmscope-cli start [--upstream <url>] [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]';
 
 const doctorUsage =
   'Usage: llmscope-cli doctor [--config <path>] [--host <host>] [--port <port>] [--ui-port <port>]';
+
+const listUsage =
+  'Usage: llmscope-cli list [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]';
+
+const showUsage =
+  'Usage: llmscope-cli show --session-id <id> [--config <path>] [--host <host>] [--ui-port <port>]';
 
 const clearUsage =
   'Usage: llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]';
@@ -190,24 +223,21 @@ export const parseCliArgs = (args: string[]): ParsedCliArgs => {
     }
   }
 
-  if (upstreamUrl === undefined) {
-    throw new Error(`Missing required --upstream option.\n${startUsage}`);
+  const options: CliRuntimeOptions = {};
+  const configOverrides: LLMScopeConfig = {};
+
+  if (upstreamUrl !== undefined) {
+    let normalizedUpstreamUrl: string;
+
+    try {
+      normalizedUpstreamUrl = new URL(upstreamUrl).toString();
+    } catch {
+      throw new Error(`Invalid upstream URL: ${upstreamUrl}.`);
+    }
+
+    options.upstreamUrl = normalizedUpstreamUrl;
+    configOverrides.routes = [toRouteConfig(normalizedUpstreamUrl)];
   }
-
-  let normalizedUpstreamUrl: string;
-
-  try {
-    normalizedUpstreamUrl = new URL(upstreamUrl).toString();
-  } catch {
-    throw new Error(`Invalid upstream URL: ${upstreamUrl}.`);
-  }
-
-  const options: CliRuntimeOptions = {
-    upstreamUrl: normalizedUpstreamUrl,
-  };
-  const configOverrides: LLMScopeConfig = {
-    routes: [toRouteConfig(normalizedUpstreamUrl)],
-  };
 
   if (host !== undefined) {
     options.host = host;
@@ -352,11 +382,16 @@ const parseClearCommand = (args: string[]): ClearCommand => {
 
   const result: ClearCommand = {
     kind: 'clear',
-    target: {
-      host: host ?? '127.0.0.1',
-      port: uiPort ?? 8788,
-    },
+    target: {},
   };
+
+  if (host !== undefined) {
+    result.target.host = host;
+  }
+
+  if (uiPort !== undefined) {
+    result.target.port = uiPort;
+  }
 
   if (configFilePath !== undefined) {
     result.configFilePath = configFilePath;
@@ -364,6 +399,150 @@ const parseClearCommand = (args: string[]): ClearCommand => {
 
   if (sessionId !== undefined) {
     result.sessionId = sessionId;
+  }
+
+  return result;
+};
+
+const parseListCommand = (args: string[]): ListCommand => {
+  let host: string | undefined;
+  let uiPort: number | undefined;
+  let configFilePath: string | undefined;
+  const query: ListSessionsQuery = {};
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--status': {
+        const status = takeOptionValue(args, index, '--status');
+        if (!isSessionStatus(status)) {
+          throw new Error(`Invalid value for --status: ${status}.`);
+        }
+        query.status = status;
+        index += 1;
+        break;
+      }
+      case '--provider':
+        query.provider = takeOptionValue(args, index, '--provider').trim();
+        index += 1;
+        break;
+      case '--model':
+        query.model = takeOptionValue(args, index, '--model').trim();
+        index += 1;
+        break;
+      case '--search':
+        query.search = takeOptionValue(args, index, '--search').trim();
+        index += 1;
+        break;
+      case '--limit':
+        query.limit = parseNumberOption(
+          '--limit',
+          takeOptionValue(args, index, '--limit'),
+        );
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(listUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${listUsage}`);
+    }
+  }
+
+  const result: ListCommand = {
+    kind: 'list',
+    target: {},
+    query,
+  };
+
+  if (host !== undefined) {
+    result.target.host = host;
+  }
+
+  if (uiPort !== undefined) {
+    result.target.port = uiPort;
+  }
+
+  if (configFilePath !== undefined) {
+    result.configFilePath = configFilePath;
+  }
+
+  return result;
+};
+
+const parseShowCommand = (args: string[]): ShowCommand => {
+  let host: string | undefined;
+  let uiPort: number | undefined;
+  let configFilePath: string | undefined;
+  let sessionId: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--session-id':
+        sessionId = takeOptionValue(args, index, '--session-id');
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(showUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${showUsage}`);
+    }
+  }
+
+  if (sessionId === undefined) {
+    throw new Error(`Missing required --session-id option.\n${showUsage}`);
+  }
+
+  const result: ShowCommand = {
+    kind: 'show',
+    target: {},
+    sessionId,
+  };
+
+  if (host !== undefined) {
+    result.target.host = host;
+  }
+
+  if (uiPort !== undefined) {
+    result.target.port = uiPort;
+  }
+
+  if (configFilePath !== undefined) {
+    result.configFilePath = configFilePath;
   }
 
   return result;
@@ -389,6 +568,14 @@ export const parseCommand = (args: string[]): CliCommand => {
       kind: 'doctor',
       ...parsed,
     };
+  }
+
+  if (command === 'list') {
+    return parseListCommand(rest);
+  }
+
+  if (command === 'show') {
+    return parseShowCommand(rest);
   }
 
   if (command === 'clear') {
@@ -427,6 +614,73 @@ export const formatSessionSummary = (session: Session): string => {
     `code=${formatStatusCode(session)}`,
     `duration=${formatDuration(session)}`,
   ].join(' ');
+};
+
+const formatSummaryValue = (
+  value: string | number | boolean | undefined,
+): string => {
+  if (value === undefined) {
+    return '-';
+  }
+
+  return String(value);
+};
+
+const renderSessionSummaryRow = (session: SessionSummary): string => {
+  return [
+    `[session ${session.id}]`,
+    session.method,
+    session.path,
+    `status=${session.status}`,
+    `provider=${formatSummaryValue(session.provider)}`,
+    `model=${formatSummaryValue(session.model)}`,
+    `duration=${session.durationMs === undefined ? '-' : `${session.durationMs}ms`}`,
+    `warnings=${session.warningCount}`,
+    `error=${formatSummaryValue(session.errorCode)}`,
+  ].join(' ');
+};
+
+const readErrorBody = async (response: Response): Promise<string> => {
+  const body = (await response.json().catch(() => null)) as {
+    error?: string;
+  } | null;
+  return (
+    body?.error ??
+    `Observation API request failed with status ${response.status}.`
+  );
+};
+
+const buildObservationBaseUrl = (host: string, port: number): string => {
+  return `http://${host}:${port}`;
+};
+
+const toResolveConfigOptions = (
+  overrides: LLMScopeConfig,
+  configFilePath?: string,
+): NonNullable<Parameters<typeof resolveConfig>[0]> => {
+  return configFilePath === undefined
+    ? { overrides }
+    : {
+        filePath: configFilePath,
+        overrides,
+      };
+};
+
+const resolveCommandConfig = (
+  overrides: LLMScopeConfig,
+  configFilePath?: string,
+): ResolvedConfig => {
+  return resolveConfig(toResolveConfigOptions(overrides, configFilePath));
+};
+
+const resolveObservationTarget = (
+  target: { host?: string; port?: number },
+  resolvedConfig: ResolvedConfig,
+): { host: string; port: number } => {
+  return {
+    host: target.host ?? resolvedConfig.proxy.host,
+    port: target.port ?? resolvedConfig.ui.port,
+  };
 };
 
 const toRouteConfig = (upstreamUrl: string): RouteConfig => ({
@@ -893,7 +1147,17 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
   const config = options.config ?? defaultConfig;
   const resolvedHost = options.host ?? config.proxy.host;
   const resolvedPort = options.port ?? config.proxy.port;
-  const route = toRouteConfig(options.upstreamUrl);
+  const route =
+    options.upstreamUrl === undefined
+      ? config.routes[0]
+      : toRouteConfig(options.upstreamUrl);
+
+  if (route === undefined) {
+    throw new Error(
+      'No upstream route configured. Provide --upstream or configure at least one route.',
+    );
+  }
+
   const store = createSessionStore(options);
   const privacy = options.privacy ?? config.privacy;
   const engine = new NodeProxyEngine({
@@ -973,15 +1237,9 @@ export const runCli = async (args: string[]): Promise<void> => {
   const command = parseCommand(args);
 
   if (command.kind === 'doctor') {
-    const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
-      overrides: command.configOverrides,
-    };
-
-    if (command.configFilePath !== undefined) {
-      resolveOptions.filePath = command.configFilePath;
-    }
-
-    const report = await runDoctor(resolveConfig(resolveOptions));
+    const report = await runDoctor(
+      resolveCommandConfig(command.configOverrides, command.configFilePath),
+    );
 
     for (const check of report.checks) {
       console.log(formatDoctorCheck(check));
@@ -997,36 +1255,26 @@ export const runCli = async (args: string[]): Promise<void> => {
   }
 
   if (command.kind === 'clear') {
-    const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
-      overrides: {},
-    };
+    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
+    const target = resolveObservationTarget(command.target, resolvedConfig);
 
-    if (command.configFilePath !== undefined) {
-      resolveOptions.filePath = command.configFilePath;
-    }
-
-    const resolvedConfig = resolveConfig(resolveOptions);
-
-    const targetHost = command.target.host;
-    const targetPort = command.target.port;
+    const targetHost = target.host;
+    const targetPort = target.port;
 
     const path =
       command.sessionId === undefined
         ? '/api/sessions?confirm=true'
         : `/api/sessions/${encodeURIComponent(command.sessionId)}`;
 
-    const response = await fetch(`http://${targetHost}:${targetPort}${path}`, {
-      method: 'DELETE',
-    });
+    const response = await fetch(
+      `${buildObservationBaseUrl(targetHost, targetPort)}${path}`,
+      {
+        method: 'DELETE',
+      },
+    );
 
     if (!response.ok && response.status !== 204) {
-      const body = (await response.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-      throw new Error(
-        body?.error ??
-          `Observation API request failed with status ${response.status}.`,
-      );
+      throw new Error(await readErrorBody(response));
     }
 
     console.log(
@@ -1037,16 +1285,70 @@ export const runCli = async (args: string[]): Promise<void> => {
     return;
   }
 
-  const parsedArgs = command.args;
-  const resolveOptions: NonNullable<Parameters<typeof resolveConfig>[0]> = {
-    overrides: parsedArgs.configOverrides,
-  };
+  if (command.kind === 'list') {
+    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
+    const target = resolveObservationTarget(command.target, resolvedConfig);
+    const requestUrl = new URL(
+      '/api/sessions',
+      buildObservationBaseUrl(target.host, target.port),
+    );
 
-  if (parsedArgs.configFilePath !== undefined) {
-    resolveOptions.filePath = parsedArgs.configFilePath;
+    if (command.query.status !== undefined) {
+      requestUrl.searchParams.set('status', command.query.status);
+    }
+    if (command.query.provider !== undefined) {
+      requestUrl.searchParams.set('provider', command.query.provider);
+    }
+    if (command.query.model !== undefined) {
+      requestUrl.searchParams.set('model', command.query.model);
+    }
+    if (command.query.search !== undefined) {
+      requestUrl.searchParams.set('search', command.query.search);
+    }
+    if (command.query.limit !== undefined) {
+      requestUrl.searchParams.set('limit', String(command.query.limit));
+    }
+
+    const response = await fetch(requestUrl);
+    if (!response.ok) {
+      throw new Error(await readErrorBody(response));
+    }
+
+    const sessions = (await response.json()) as SessionSummary[];
+
+    if (sessions.length === 0) {
+      console.log('No captured sessions found.');
+      return;
+    }
+
+    for (const session of sessions) {
+      console.log(renderSessionSummaryRow(session));
+    }
+
+    return;
   }
 
-  const resolvedConfig = resolveConfig(resolveOptions);
+  if (command.kind === 'show') {
+    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
+    const target = resolveObservationTarget(command.target, resolvedConfig);
+    const response = await fetch(
+      `${buildObservationBaseUrl(target.host, target.port)}/api/sessions/${encodeURIComponent(command.sessionId)}`,
+    );
+
+    if (!response.ok) {
+      throw new Error(await readErrorBody(response));
+    }
+
+    const session = (await response.json()) as Session;
+    console.log(JSON.stringify(session, null, 2));
+    return;
+  }
+
+  const parsedArgs = command.args;
+  const resolvedConfig = resolveCommandConfig(
+    parsedArgs.configOverrides,
+    parsedArgs.configFilePath,
+  );
 
   const runtime = createCliRuntime({
     ...parsedArgs.runtimeOptions,

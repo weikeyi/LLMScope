@@ -23,7 +23,11 @@ describe('openAiResponsesPlugin', () => {
       provider: 'openai',
       apiStyle: 'responses',
       confidence: 1,
-      reasons: ['matched POST /v1/responses', 'found model field', 'found input field'],
+      reasons: [
+        'matched POST /v1/responses',
+        'found model field',
+        'found input field',
+      ],
     });
   });
 
@@ -105,6 +109,7 @@ describe('openAiResponsesPlugin', () => {
             role: 'user',
             parts: [{ type: 'text', text: 'Hello there' }],
             raw: {
+              type: 'message',
               role: 'user',
               content: [{ type: 'input_text', text: 'Hello there' }],
             },
@@ -231,7 +236,8 @@ describe('openAiResponsesPlugin', () => {
       sessionId: 'session-1',
       eventId: 'event-1',
       sequence: 0,
-      rawLine: '{"type":"response.created","response":{"status":"in_progress"}}',
+      rawLine:
+        '{"type":"response.created","response":{"status":"in_progress"}}',
       rawJson: {
         type: 'response.created',
         response: { status: 'in_progress' },
@@ -291,7 +297,8 @@ describe('openAiResponsesPlugin', () => {
       sessionId: 'session-1',
       eventId: 'event-4',
       sequence: 3,
-      rawLine: '{"type":"response.usage","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}',
+      rawLine:
+        '{"type":"response.usage","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}',
       rawJson: {
         type: 'response.usage',
         usage: {
@@ -313,7 +320,8 @@ describe('openAiResponsesPlugin', () => {
       sessionId: 'session-1',
       eventId: 'event-5',
       sequence: 4,
-      rawLine: '{"type":"response.completed","response":{"status":"completed"}}',
+      rawLine:
+        '{"type":"response.completed","response":{"status":"completed"}}',
       rawJson: {
         type: 'response.completed',
         response: { status: 'completed' },
@@ -326,7 +334,8 @@ describe('openAiResponsesPlugin', () => {
         sessionId: 'session-1',
         ts: expect.any(Number),
         eventType: 'message_start',
-        rawLine: '{"type":"response.created","response":{"status":"in_progress"}}',
+        rawLine:
+          '{"type":"response.created","response":{"status":"in_progress"}}',
         rawJson: {
           type: 'response.created',
           response: { status: 'in_progress' },
@@ -382,7 +391,8 @@ describe('openAiResponsesPlugin', () => {
         sessionId: 'session-1',
         ts: expect.any(Number),
         eventType: 'usage',
-        rawLine: '{"type":"response.usage","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}',
+        rawLine:
+          '{"type":"response.usage","usage":{"input_tokens":5,"output_tokens":7,"total_tokens":12}}',
         rawJson: {
           type: 'response.usage',
           usage: {
@@ -404,7 +414,8 @@ describe('openAiResponsesPlugin', () => {
         sessionId: 'session-1',
         ts: expect.any(Number),
         eventType: 'message_stop',
-        rawLine: '{"type":"response.completed","response":{"status":"completed"}}',
+        rawLine:
+          '{"type":"response.completed","response":{"status":"completed"}}',
         rawJson: {
           type: 'response.completed',
           response: { status: 'completed' },
