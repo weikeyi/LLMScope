@@ -230,6 +230,12 @@ describe('@llmscope/cli parseCommand', () => {
     expect(() => parseCommand(['wat'])).toThrow('Unknown command: wat.');
   });
 
+  it('shows general help including the export command', () => {
+    expect(() => parseCommand(['--help'])).toThrow(
+      'llmscope-cli export [--session-id <id>] [--format <json|ndjson>] [--output <path>] [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
+    );
+  });
+
   it('parses the clear subcommand with optional target arguments', () => {
     expect(
       parseCommand([
@@ -2211,6 +2217,12 @@ describe('@llmscope/cli observation api', () => {
   it('show command shows help for --help', () => {
     expect(() => parseCommand(['show', '--help'])).toThrow(
       'Usage: llmscope-cli show --session-id <id> [--config <path>] [--host <host>] [--ui-port <port>]',
+    );
+  });
+
+  it('export command shows help for --help', () => {
+    expect(() => parseCommand(['export', '--help'])).toThrow(
+      'Usage: llmscope-cli export [--session-id <id>] [--format <json|ndjson>] [--output <path>] [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
     );
   });
 
