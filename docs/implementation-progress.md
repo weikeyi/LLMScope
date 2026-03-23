@@ -15,20 +15,26 @@
 
 ## 2. 校验快照
 
-以下命令已在 **2026-03-22** 本地执行：
+以下命令已在 **2026-03-23** 本地执行：
 
+- `pnpm exec turbo run build --force`
+- `pnpm --filter @llmscope/cli exec vitest run --config ../../vitest.config.ts apps/cli/tests/dist-smoke.test.ts`
 - `pnpm test`
 - `pnpm typecheck`
+- `pnpm lint`
 
 当前结论：
 
+- `pnpm exec turbo run build --force`：**通过**
+- `pnpm --filter @llmscope/cli exec vitest run --config ../../vitest.config.ts apps/cli/tests/dist-smoke.test.ts`：**通过**
 - `pnpm test`：**通过**
 - `pnpm typecheck`：**通过**
+- `pnpm lint`：**通过**
 
 当前自动化校验覆盖情况：
 
 - 有测试的模块：`packages/shared-types`、`packages/core`、`packages/config`、`packages/storage-memory`、`packages/storage-sqlite`、`packages/proxy-engine`、`apps/cli`、`apps/web`
-- 当前测试重点已覆盖：Provider 匹配与标准化、代理引擎请求/响应/SSE、隐私模式脱敏、CLI observation API、CLI `list/show/clear/export`、Web observation UI、内存存储与 SQLite 存储
+- 当前测试重点已覆盖：Provider 匹配与标准化、代理引擎请求/响应/SSE、隐私模式脱敏、CLI observation API、CLI `list/show/clear/export`、CLI dist smoke verification、Web observation UI、内存存储与 SQLite 存储
 - 当前测试基线：`pnpm test` 与 `pnpm typecheck` 均已通过，可作为后续开发基线
 
 ## 3. 当前实现清单
@@ -168,8 +174,8 @@
 
 按影响优先级排序，当前最值得优先补齐的是：
 
-1. **配置与运行时硬化仍需继续推进**  
-   统一配置链路、默认配置发现、命令级测试和 CLI `export` 已经打通，但仍缺更高层的 dist smoke verification 与发布前运行文档，离“开箱即用”还有最后一段距离。
+1. **发布与运行文档仍需继续推进**  
+   统一配置链路、默认配置发现、命令级测试、CLI `export` 和 dist smoke verification 已经打通，但仍缺 CI 自动化、发布流程和更完整的 Quick Start，离“稳定交付”还有最后一段距离。
 
 2. **应用层仍缺真正的“可操作产品表面”**  
    用户已经能看数据、清理数据并导出数据，但还不能方便地对比、实时刷新、长期管理或通过更完整 Web 应用交互使用。
@@ -192,7 +198,6 @@
 
 - 收紧 `ResolvedConfig` 到各命令的落地路径
 - 为配置驱动启动、检查、观测和导出命令补充更强测试
-- 为 dist 产物补充更直接的 smoke verification
 - 让 `apps/web` 从只读观察页继续演进到最小可用交互界面
 
 ### 第二优先级：应用层增强

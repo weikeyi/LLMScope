@@ -78,10 +78,28 @@ Still planned:
 
 The CLI starts a local proxy, serves the observation API, and provides non-long-running inspection and export commands.
 
+### Build dist artifacts first
+
+Before running any `dist/` command from this README, build the workspace from the repository root:
+
+```bash
+pnpm exec turbo run build --force
+```
+
+The built CLI and web artifacts depend on sibling workspace packages, so a workspace build is the supported dist path.
+
+### Smoke check the built CLI
+
+Use these commands to verify the built CLI artifacts are runnable before deeper manual testing:
+
+```bash
+node apps/cli/dist/index.js --help
+node apps/cli/dist/index.js doctor --config ./examples/llmscope.yaml
+```
+
 ### Start the CLI
 
 ```bash
-pnpm --filter @llmscope/cli build
 node apps/cli/dist/index.js start --upstream https://example.com
 ```
 
@@ -145,7 +163,6 @@ While the proxy is running, the observation API also supports CLI inspection com
 Recommended read-only inspection surface:
 
 ```bash
-pnpm --filter @llmscope/web build
 node apps/web/dist/index.js --api-base-url http://127.0.0.1:8788 --port 3000
 ```
 
@@ -159,7 +176,6 @@ Then open `http://127.0.0.1:3000` in your browser. The web UI supports:
 The web UI package also exposes a runnable binary:
 
 ```bash
-pnpm --filter @llmscope/web build
 pnpm exec llmscope-web --api-base-url http://127.0.0.1:8788 --port 3000
 ```
 
