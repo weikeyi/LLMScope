@@ -91,12 +91,26 @@ export interface ShowCommand {
   sessionId: string;
 }
 
+export interface ExportCommand {
+  kind: 'export';
+  configFilePath?: string;
+  target: {
+    host?: string;
+    port?: number;
+  };
+  format: 'json' | 'ndjson';
+  outputPath?: string;
+  query: ListSessionsQuery;
+  sessionId?: string;
+}
+
 export type CliCommand =
   | StartCommand
   | DoctorCommand
   | ClearCommand
   | ListCommand
-  | ShowCommand;
+  | ShowCommand
+  | ExportCommand;
 
 export interface DoctorCheckResult {
   label: string;
@@ -132,6 +146,7 @@ const generalUsage = [
   '  llmscope-cli list [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
   '  llmscope-cli show --session-id <id> [--config <path>] [--host <host>] [--ui-port <port>]',
   '  llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]',
+  '  llmscope-cli export [--session-id <id>] [--format <json|ndjson>] [--output <path>] [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
   '',
 ].join('\n');
 
@@ -149,6 +164,9 @@ const showUsage =
 
 const clearUsage =
   'Usage: llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]';
+
+const exportUsage =
+  'Usage: llmscope-cli export [--session-id <id>] [--format <json|ndjson>] [--output <path>] [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]';
 
 const parseNumberOption = (name: string, value: string | undefined): number => {
   if (value === undefined) {
@@ -548,6 +566,123 @@ const parseShowCommand = (args: string[]): ShowCommand => {
   return result;
 };
 
+const parseExportCommand = (args: string[]): ExportCommand => {
+  let host: string | undefined;
+  let uiPort: number | undefined;
+  let configFilePath: string | undefined;
+  let sessionId: string | undefined;
+  let outputPath: string | undefined;
+  let format: 'json' | 'ndjson' = 'json';
+  const query: ListSessionsQuery = {};
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--session-id':
+        sessionId = takeOptionValue(args, index, '--session-id');
+        index += 1;
+        break;
+      case '--format': {
+        const value = takeOptionValue(args, index, '--format');
+        if (value !== 'json' && value !== 'ndjson') {
+          throw new Error(`Invalid value for --format: ${value}.`);
+        }
+        format = value;
+        index += 1;
+        break;
+      }
+      case '--output':
+        outputPath = takeOptionValue(args, index, '--output');
+        index += 1;
+        break;
+      case '--status': {
+        const status = takeOptionValue(args, index, '--status');
+        if (!isSessionStatus(status)) {
+          throw new Error(`Invalid value for --status: ${status}.`);
+        }
+        query.status = status;
+        index += 1;
+        break;
+      }
+      case '--provider':
+        query.provider = takeOptionValue(args, index, '--provider').trim();
+        index += 1;
+        break;
+      case '--model':
+        query.model = takeOptionValue(args, index, '--model').trim();
+        index += 1;
+        break;
+      case '--search':
+        query.search = takeOptionValue(args, index, '--search').trim();
+        index += 1;
+        break;
+      case '--limit':
+        query.limit = parseNumberOption(
+          '--limit',
+          takeOptionValue(args, index, '--limit'),
+        );
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(exportUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${exportUsage}`);
+    }
+  }
+
+  if (sessionId !== undefined && Object.keys(query).length > 0) {
+    throw new Error(
+      'The --session-id option cannot be combined with collection filters.',
+    );
+  }
+
+  const result: ExportCommand = {
+    kind: 'export',
+    target: {},
+    format,
+    query,
+  };
+
+  if (host !== undefined) {
+    result.target.host = host;
+  }
+
+  if (uiPort !== undefined) {
+    result.target.port = uiPort;
+  }
+
+  if (configFilePath !== undefined) {
+    result.configFilePath = configFilePath;
+  }
+
+  if (sessionId !== undefined) {
+    result.sessionId = sessionId;
+  }
+
+  if (outputPath !== undefined) {
+    result.outputPath = outputPath;
+  }
+
+  return result;
+};
+
 export const parseCommand = (args: string[]): CliCommand => {
   const [command, ...rest] = args;
 
@@ -580,6 +715,10 @@ export const parseCommand = (args: string[]): CliCommand => {
 
   if (command === 'clear') {
     return parseClearCommand(rest);
+  }
+
+  if (command === 'export') {
+    return parseExportCommand(rest);
   }
 
   throw new Error(`Unknown command: ${command}.\n${generalUsage}`);

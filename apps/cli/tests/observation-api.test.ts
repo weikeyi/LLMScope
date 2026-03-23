@@ -309,6 +309,74 @@ describe('@llmscope/cli parseCommand', () => {
       sessionId: 'session-123',
     });
   });
+
+  it('parses the export subcommand for a single session', () => {
+    expect(
+      parseCommand([
+        'export',
+        '--host',
+        '127.0.0.1',
+        '--ui-port',
+        '9001',
+        '--session-id',
+        'session-123',
+      ]),
+    ).toEqual({
+      kind: 'export',
+      target: {
+        host: '127.0.0.1',
+        port: 9001,
+      },
+      format: 'json',
+      query: {},
+      sessionId: 'session-123',
+    });
+  });
+
+  it('parses the export subcommand with filters and file output', () => {
+    expect(
+      parseCommand([
+        'export',
+        '--format',
+        'ndjson',
+        '--output',
+        './tmp/sessions.ndjson',
+        '--status',
+        'completed',
+        '--limit',
+        '5',
+      ]),
+    ).toEqual({
+      kind: 'export',
+      target: {},
+      format: 'ndjson',
+      outputPath: './tmp/sessions.ndjson',
+      query: {
+        status: 'completed',
+        limit: 5,
+      },
+    });
+  });
+
+  it('rejects unsupported export formats', () => {
+    expect(() => parseCommand(['export', '--format', 'csv'])).toThrow(
+      'Invalid value for --format: csv.',
+    );
+  });
+
+  it('rejects export session id mixed with collection filters', () => {
+    expect(() =>
+      parseCommand([
+        'export',
+        '--session-id',
+        'session-123',
+        '--status',
+        'completed',
+      ]),
+    ).toThrow(
+      'The --session-id option cannot be combined with collection filters.',
+    );
+  });
 });
 
 describe('@llmscope/cli doctor', () => {
