@@ -4,4 +4,6 @@ coverage/
 .turbo/
 .claude/
 .omc/
+.codex
+data/
 .worktrees/
