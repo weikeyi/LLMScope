@@ -695,7 +695,7 @@ describe('@llmscope/cli observation api', () => {
       });
       expect(optionsResponse.status).toBe(204);
       expect(optionsResponse.headers.get('access-control-allow-methods')).toBe(
-        'GET, DELETE, OPTIONS',
+        'GET, POST, DELETE, OPTIONS',
       );
       expect(methodNotAllowedResponse.status).toBe(405);
       expect(await methodNotAllowedResponse.json()).toEqual({

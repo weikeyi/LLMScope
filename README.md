@@ -7,15 +7,14 @@ Local-first LLM traffic inspector for config-driven gateway and proxy workflows.
 As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runtime:
 
 - config-driven CLI startup with config file discovery
-- CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`
-- observation API for health, summaries, detail, delete, and clear operations
+- CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`, `export`
+- observation API for health, config, summaries, detail, export, delete, and clear operations
 - server-rendered read-only observation UI with list, filters, detail, empty, and error states
 - provider-aware normalization for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
 - privacy modes and SQLite-backed persistence
 
 The complete product contract is broader than the current implementation. Still planned:
 
-- CLI and UI export workflows
 - interactive Web actions and URL-stable operator flows
 - live session updates
 - diff and replay workflows
@@ -36,6 +35,8 @@ MITM interception and local CA management are explicitly deferred to the final o
 The repository is a pnpm workspace monorepo with these active ownership points:
 
 - `apps/cli`: runtime entrypoint, command surface, observation API host
+- `apps/cli/src/commands/*`: command execution modules
+- `apps/cli/src/server/*`: observation HTTP routes and export serialization
 - `apps/web`: observation UI server and HTML rendering
 - `packages/config`: config loading, override merging, runtime validation
 - `packages/proxy-engine`: proxying, capture, normalization, privacy-adjacent runtime logic
@@ -96,6 +97,20 @@ node apps/cli/dist/index.js list --host 127.0.0.1 --ui-port 8788 --status comple
 node apps/cli/dist/index.js show --host 127.0.0.1 --ui-port 8788 --session-id <session-id>
 node apps/cli/dist/index.js clear --host 127.0.0.1 --ui-port 8788 --session-id <session-id>
 ```
+
+Export captured sessions:
+
+```bash
+node apps/cli/dist/index.js export --host 127.0.0.1 --ui-port 8788 --session-id <session-id> --format json --output ./exports/session.json
+node apps/cli/dist/index.js export --config ./llmscope.yaml --status completed --format ndjson --output ./exports/sessions.ndjson
+node apps/cli/dist/index.js export --config ./llmscope.yaml --status completed --format markdown --output ./exports/sessions.md
+```
+
+Supported export formats:
+
+- `json`: one full session object or a JSON array of sessions
+- `ndjson`: one full session per line
+- `markdown`: operator-friendly Markdown export for inspection and sharing
 
 Run the observation UI:
 

@@ -38,8 +38,13 @@ Today, `apps/cli` is the executable runtime host. It resolves config, starts the
 - `apps/cli/src/index.ts`
   - command parsing
   - runtime bootstrapping
-  - observation API wiring
-  - doctor and inspection command behavior
+  - top-level command dispatch
+- `apps/cli/src/commands/*`
+  - command execution and shared command-side config resolution
+- `apps/cli/src/server/*`
+  - observation HTTP server
+  - route handling
+  - export serialization
 - `apps/web/src/index.ts`
   - observation UI server
   - API reads
@@ -90,7 +95,7 @@ These boundaries should be introduced only after product workflows prove the int
 
 ### CLI
 
-Before additional CLI features land, split `apps/cli/src/index.ts` into:
+Milestone 2 split the CLI into:
 
 - `apps/cli/src/commands/*`
 - `apps/cli/src/server/http.ts`

@@ -1,9 +1,4 @@
 import { accessSync, constants, mkdirSync } from 'node:fs';
-import {
-  createServer,
-  type IncomingMessage,
-  type ServerResponse,
-} from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import { dirname } from 'node:path';
 import process from 'node:process';
@@ -28,11 +23,20 @@ import {
 import type {
   ListSessionsQuery,
   Session,
-  SessionSummary,
   SessionStatus,
 } from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
 import { SqliteSessionStore } from '@llmscope/storage-sqlite';
+
+import { runClearCommand } from './commands/clear.js';
+import { runDoctorCommand } from './commands/doctor.js';
+import { runExportCommand } from './commands/export.js';
+import { runListCommand } from './commands/list.js';
+import { resolveCommandConfig } from './commands/shared.js';
+import { runShowCommand } from './commands/show.js';
+import { runStartCommand } from './commands/start.js';
+import { createObservationServer, type ObservationServer } from './server/http.js';
+import type { ExportFormat } from './server/export.js';
 
 export interface CliRuntimeOptions {
   upstreamUrl?: string;
@@ -91,12 +95,26 @@ export interface ShowCommand {
   sessionId: string;
 }
 
+export interface ExportCommand {
+  kind: 'export';
+  configFilePath?: string;
+  target: {
+    host?: string;
+    port?: number;
+  };
+  sessionId?: string;
+  format: ExportFormat;
+  outputPath?: string;
+  query: ListSessionsQuery;
+}
+
 export type CliCommand =
   | StartCommand
   | DoctorCommand
   | ClearCommand
   | ListCommand
-  | ShowCommand;
+  | ShowCommand
+  | ExportCommand;
 
 export interface DoctorCheckResult {
   label: string;
@@ -117,12 +135,6 @@ export interface CliRuntime {
   getObservationAddress(): { host: string; port: number } | null;
 }
 
-export interface ObservationServer {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-  getAddress(): { host: string; port: number };
-}
-
 const EXIT_SIGNALS = ['SIGINT', 'SIGTERM'] as const;
 
 const generalUsage = [
@@ -132,6 +144,7 @@ const generalUsage = [
   '  llmscope-cli list [--config <path>] [--host <host>] [--ui-port <port>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
   '  llmscope-cli show --session-id <id> [--config <path>] [--host <host>] [--ui-port <port>]',
   '  llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]',
+  '  llmscope-cli export [--config <path>] [--host <host>] [--ui-port <port>] [--session-id <id>] [--format json|ndjson|markdown] [--output <path>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]',
   '',
 ].join('\n');
 
@@ -149,6 +162,9 @@ const showUsage =
 
 const clearUsage =
   'Usage: llmscope-cli clear [--host <host>] [--ui-port <port>] [--session-id <id>]';
+
+const exportUsage =
+  'Usage: llmscope-cli export [--config <path>] [--host <host>] [--ui-port <port>] [--session-id <id>] [--format json|ndjson|markdown] [--output <path>] [--status <status>] [--provider <provider>] [--model <model>] [--search <text>] [--limit <n>]';
 
 const parseNumberOption = (name: string, value: string | undefined): number => {
   if (value === undefined) {
@@ -548,6 +564,132 @@ const parseShowCommand = (args: string[]): ShowCommand => {
   return result;
 };
 
+const parseExportCommand = (args: string[]): ExportCommand => {
+  let host: string | undefined;
+  let uiPort: number | undefined;
+  let configFilePath: string | undefined;
+  let sessionId: string | undefined;
+  let outputPath: string | undefined;
+  let format: ExportFormat = 'json';
+  const query: ListSessionsQuery = {};
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    switch (arg) {
+      case '--config':
+        configFilePath = takeOptionValue(args, index, '--config');
+        index += 1;
+        break;
+      case '--host':
+        host = takeOptionValue(args, index, '--host');
+        index += 1;
+        break;
+      case '--ui-port':
+        uiPort = parseNumberOption(
+          '--ui-port',
+          takeOptionValue(args, index, '--ui-port'),
+        );
+        index += 1;
+        break;
+      case '--session-id':
+        sessionId = takeOptionValue(args, index, '--session-id');
+        index += 1;
+        break;
+      case '--format': {
+        const value = takeOptionValue(args, index, '--format');
+
+        if (value !== 'json' && value !== 'ndjson' && value !== 'markdown') {
+          throw new Error(`Invalid value for --format: ${value}.`);
+        }
+
+        format = value;
+        index += 1;
+        break;
+      }
+      case '--output':
+        outputPath = takeOptionValue(args, index, '--output');
+        index += 1;
+        break;
+      case '--status': {
+        const status = takeOptionValue(args, index, '--status');
+        if (!isSessionStatus(status)) {
+          throw new Error(`Invalid value for --status: ${status}.`);
+        }
+        query.status = status;
+        index += 1;
+        break;
+      }
+      case '--provider':
+        query.provider = takeOptionValue(args, index, '--provider').trim();
+        index += 1;
+        break;
+      case '--model':
+        query.model = takeOptionValue(args, index, '--model').trim();
+        index += 1;
+        break;
+      case '--search':
+        query.search = takeOptionValue(args, index, '--search').trim();
+        index += 1;
+        break;
+      case '--limit':
+        query.limit = parseNumberOption(
+          '--limit',
+          takeOptionValue(args, index, '--limit'),
+        );
+        index += 1;
+        break;
+      case '--help':
+      case '-h':
+        throw new Error(exportUsage);
+      default:
+        throw new Error(`Unknown argument: ${arg}.\n${exportUsage}`);
+    }
+  }
+
+  const hasCollectionFilters =
+    query.status !== undefined ||
+    query.provider !== undefined ||
+    query.model !== undefined ||
+    query.search !== undefined ||
+    query.limit !== undefined;
+
+  if (sessionId !== undefined && hasCollectionFilters) {
+    throw new Error(
+      'The --session-id option cannot be combined with collection filters.',
+    );
+  }
+
+  const result: ExportCommand = {
+    kind: 'export',
+    target: {},
+    format,
+    query,
+  };
+
+  if (sessionId !== undefined) {
+    result.sessionId = sessionId;
+  }
+
+  if (host !== undefined) {
+    result.target.host = host;
+  }
+
+  if (uiPort !== undefined) {
+    result.target.port = uiPort;
+  }
+
+  if (configFilePath !== undefined) {
+    result.configFilePath = configFilePath;
+  }
+
+  if (outputPath !== undefined) {
+    result.outputPath = outputPath;
+  }
+
+  return result;
+};
+
 export const parseCommand = (args: string[]): CliCommand => {
   const [command, ...rest] = args;
 
@@ -580,6 +722,10 @@ export const parseCommand = (args: string[]): CliCommand => {
 
   if (command === 'clear') {
     return parseClearCommand(rest);
+  }
+
+  if (command === 'export') {
+    return parseExportCommand(rest);
   }
 
   throw new Error(`Unknown command: ${command}.\n${generalUsage}`);
@@ -616,73 +762,6 @@ export const formatSessionSummary = (session: Session): string => {
   ].join(' ');
 };
 
-const formatSummaryValue = (
-  value: string | number | boolean | undefined,
-): string => {
-  if (value === undefined) {
-    return '-';
-  }
-
-  return String(value);
-};
-
-const renderSessionSummaryRow = (session: SessionSummary): string => {
-  return [
-    `[session ${session.id}]`,
-    session.method,
-    session.path,
-    `status=${session.status}`,
-    `provider=${formatSummaryValue(session.provider)}`,
-    `model=${formatSummaryValue(session.model)}`,
-    `duration=${session.durationMs === undefined ? '-' : `${session.durationMs}ms`}`,
-    `warnings=${session.warningCount}`,
-    `error=${formatSummaryValue(session.errorCode)}`,
-  ].join(' ');
-};
-
-const readErrorBody = async (response: Response): Promise<string> => {
-  const body = (await response.json().catch(() => null)) as {
-    error?: string;
-  } | null;
-  return (
-    body?.error ??
-    `Observation API request failed with status ${response.status}.`
-  );
-};
-
-const buildObservationBaseUrl = (host: string, port: number): string => {
-  return `http://${host}:${port}`;
-};
-
-const toResolveConfigOptions = (
-  overrides: LLMScopeConfig,
-  configFilePath?: string,
-): NonNullable<Parameters<typeof resolveConfig>[0]> => {
-  return configFilePath === undefined
-    ? { overrides }
-    : {
-        filePath: configFilePath,
-        overrides,
-      };
-};
-
-const resolveCommandConfig = (
-  overrides: LLMScopeConfig,
-  configFilePath?: string,
-): ResolvedConfig => {
-  return resolveConfig(toResolveConfigOptions(overrides, configFilePath));
-};
-
-const resolveObservationTarget = (
-  target: { host?: string; port?: number },
-  resolvedConfig: ResolvedConfig,
-): { host: string; port: number } => {
-  return {
-    host: target.host ?? resolvedConfig.proxy.host,
-    port: target.port ?? resolvedConfig.ui.port,
-  };
-};
-
 const toRouteConfig = (upstreamUrl: string): RouteConfig => ({
   id: 'default',
   targetBaseUrl: upstreamUrl,
@@ -716,272 +795,8 @@ const toResolvedRoute = (route: RouteConfig) => {
   return resolvedRoute;
 };
 
-const sendJson = (
-  response: ServerResponse,
-  statusCode: number,
-  body: unknown,
-): void => {
-  response.statusCode = statusCode;
-  response.setHeader('content-type', 'application/json; charset=utf-8');
-  response.end(JSON.stringify(body));
-};
-
-const sendNotFound = (response: ServerResponse): void => {
-  sendJson(response, 404, {
-    error: 'Not found.',
-  });
-};
-
-const sendMethodNotAllowed = (response: ServerResponse): void => {
-  sendJson(response, 405, {
-    error: 'Method not allowed.',
-  });
-};
-
-const sendBadRequest = (response: ServerResponse, message: string): void => {
-  sendJson(response, 400, {
-    error: message,
-  });
-};
-
 const isSessionStatus = (value: string): value is SessionStatus => {
   return ['pending', 'streaming', 'completed', 'error'].includes(value);
-};
-
-const takeSingleSearchParam = (
-  value: string | string[] | undefined,
-): string | undefined => {
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-
-  return value;
-};
-
-const toListSessionsQuery = (
-  url: URL,
-): { query: ListSessionsQuery } | { error: string } => {
-  const query: ListSessionsQuery = {};
-
-  const status = takeSingleSearchParam(url.searchParams.getAll('status'));
-  if (status !== undefined && status.length > 0) {
-    if (!isSessionStatus(status)) {
-      return {
-        error: `Invalid status query value: ${status}.`,
-      };
-    }
-
-    query.status = status;
-  }
-
-  const provider = url.searchParams.get('provider')?.trim();
-  if (provider !== undefined && provider.length > 0) {
-    query.provider = provider;
-  }
-
-  const model = url.searchParams.get('model')?.trim();
-  if (model !== undefined && model.length > 0) {
-    query.model = model;
-  }
-
-  const search = url.searchParams.get('search')?.trim();
-  if (search !== undefined && search.length > 0) {
-    query.search = search;
-  }
-
-  const limit = url.searchParams.get('limit')?.trim();
-  if (limit !== undefined && limit.length > 0) {
-    const parsed = Number(limit);
-
-    if (!Number.isInteger(parsed) || parsed < 0) {
-      return {
-        error: `Invalid limit query value: ${limit}.`,
-      };
-    }
-
-    query.limit = parsed;
-  }
-
-  return {
-    query,
-  };
-};
-
-const createObservationServer = (
-  store: SessionStore,
-  options: {
-    host: string;
-    port: number;
-    corsOrigin: string;
-  },
-): ObservationServer => {
-  const address = {
-    host: options.host,
-    port: options.port,
-  };
-  const server = createServer(
-    (request: IncomingMessage, response: ServerResponse) => {
-      void (async () => {
-        response.setHeader('access-control-allow-origin', options.corsOrigin);
-        response.setHeader(
-          'access-control-allow-methods',
-          'GET, DELETE, OPTIONS',
-        );
-        response.setHeader('access-control-allow-headers', 'content-type');
-
-        if (request.method === 'OPTIONS') {
-          response.statusCode = 204;
-          response.end();
-          return;
-        }
-
-        const requestUrl = new URL(
-          request.url ?? '/',
-          `http://${request.headers.host ?? `${options.host}:${options.port}`}`,
-        );
-
-        if (requestUrl.pathname === '/health') {
-          sendJson(response, 200, {
-            ok: true,
-          });
-          return;
-        }
-
-        if (requestUrl.pathname === '/api/sessions') {
-          if (request.method === 'GET') {
-            const queryResult = toListSessionsQuery(requestUrl);
-
-            if ('error' in queryResult) {
-              sendBadRequest(response, queryResult.error);
-              return;
-            }
-
-            const sessions = await store.listSessions(queryResult.query);
-            sendJson(response, 200, sessions);
-            return;
-          }
-
-          if (request.method === 'DELETE') {
-            if (requestUrl.searchParams.get('confirm') !== 'true') {
-              sendBadRequest(response, 'Missing confirm=true query parameter.');
-              return;
-            }
-
-            await store.clearAll();
-            response.statusCode = 204;
-            response.end();
-            return;
-          }
-
-          sendMethodNotAllowed(response);
-          return;
-        }
-
-        const sessionDetailMatch = /^\/api\/sessions\/([^/]+)$/.exec(
-          requestUrl.pathname,
-        );
-        if (sessionDetailMatch !== null) {
-          const sessionId = decodeURIComponent(sessionDetailMatch[1] ?? '');
-
-          if (request.method === 'GET') {
-            const session = await store.getSession(sessionId);
-
-            if (session === null) {
-              sendNotFound(response);
-              return;
-            }
-
-            sendJson(response, 200, session);
-            return;
-          }
-
-          if (request.method === 'DELETE') {
-            await store.deleteSession(sessionId);
-            response.statusCode = 204;
-            response.end();
-            return;
-          }
-
-          sendMethodNotAllowed(response);
-          return;
-        }
-
-        sendNotFound(response);
-      })().catch((error: unknown) => {
-        const message =
-          error instanceof Error
-            ? error.message
-            : 'Unknown observation server error.';
-
-        if (response.headersSent) {
-          response.end();
-          return;
-        }
-
-        sendJson(response, 500, {
-          error: message,
-        });
-      });
-    },
-  );
-
-  let started = false;
-
-  return {
-    async start(): Promise<void> {
-      if (started) {
-        return;
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const onError = (error: Error) => {
-          server.off('listening', onListening);
-          reject(error);
-        };
-        const onListening = () => {
-          server.off('error', onError);
-          const listeningAddress = server.address();
-
-          if (
-            listeningAddress === null ||
-            typeof listeningAddress === 'string'
-          ) {
-            reject(new Error('Observation server address unavailable.'));
-            return;
-          }
-
-          address.host = listeningAddress.address;
-          address.port = listeningAddress.port;
-          resolve();
-        };
-
-        server.once('error', onError);
-        server.once('listening', onListening);
-        server.listen(options.port, options.host);
-      });
-      started = true;
-    },
-    async stop(): Promise<void> {
-      if (!started) {
-        return;
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error !== undefined && error !== null) {
-            reject(error);
-            return;
-          }
-
-          resolve();
-        });
-      });
-      started = false;
-    },
-    getAddress(): { host: string; port: number } {
-      return { ...address };
-    },
-  };
 };
 
 const createSessionStore = (options: CliRuntimeOptions): SessionStore => {
@@ -1175,6 +990,7 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
   });
   const observationServer = config.ui.enabled
     ? createObservationServer(store, {
+        config,
         host: resolvedHost,
         port: options.observationPort ?? config.ui.port,
         corsOrigin: config.ui.corsOrigin,
@@ -1237,110 +1053,27 @@ export const runCli = async (args: string[]): Promise<void> => {
   const command = parseCommand(args);
 
   if (command.kind === 'doctor') {
-    const report = await runDoctor(
-      resolveCommandConfig(command.configOverrides, command.configFilePath),
-    );
-
-    for (const check of report.checks) {
-      console.log(formatDoctorCheck(check));
-    }
-
-    console.log(`Doctor overall status: ${report.ok ? 'ok' : 'failed'}`);
-
-    if (!report.ok) {
-      process.exitCode = 1;
-    }
-
+    await runDoctorCommand(command, runDoctor);
     return;
   }
 
   if (command.kind === 'clear') {
-    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
-    const target = resolveObservationTarget(command.target, resolvedConfig);
-
-    const targetHost = target.host;
-    const targetPort = target.port;
-
-    const path =
-      command.sessionId === undefined
-        ? '/api/sessions?confirm=true'
-        : `/api/sessions/${encodeURIComponent(command.sessionId)}`;
-
-    const response = await fetch(
-      `${buildObservationBaseUrl(targetHost, targetPort)}${path}`,
-      {
-        method: 'DELETE',
-      },
-    );
-
-    if (!response.ok && response.status !== 204) {
-      throw new Error(await readErrorBody(response));
-    }
-
-    console.log(
-      command.sessionId === undefined
-        ? 'Cleared all sessions.'
-        : `Cleared session ${command.sessionId}.`,
-    );
+    await runClearCommand(command);
     return;
   }
 
   if (command.kind === 'list') {
-    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
-    const target = resolveObservationTarget(command.target, resolvedConfig);
-    const requestUrl = new URL(
-      '/api/sessions',
-      buildObservationBaseUrl(target.host, target.port),
-    );
-
-    if (command.query.status !== undefined) {
-      requestUrl.searchParams.set('status', command.query.status);
-    }
-    if (command.query.provider !== undefined) {
-      requestUrl.searchParams.set('provider', command.query.provider);
-    }
-    if (command.query.model !== undefined) {
-      requestUrl.searchParams.set('model', command.query.model);
-    }
-    if (command.query.search !== undefined) {
-      requestUrl.searchParams.set('search', command.query.search);
-    }
-    if (command.query.limit !== undefined) {
-      requestUrl.searchParams.set('limit', String(command.query.limit));
-    }
-
-    const response = await fetch(requestUrl);
-    if (!response.ok) {
-      throw new Error(await readErrorBody(response));
-    }
-
-    const sessions = (await response.json()) as SessionSummary[];
-
-    if (sessions.length === 0) {
-      console.log('No captured sessions found.');
-      return;
-    }
-
-    for (const session of sessions) {
-      console.log(renderSessionSummaryRow(session));
-    }
-
+    await runListCommand(command);
     return;
   }
 
   if (command.kind === 'show') {
-    const resolvedConfig = resolveCommandConfig({}, command.configFilePath);
-    const target = resolveObservationTarget(command.target, resolvedConfig);
-    const response = await fetch(
-      `${buildObservationBaseUrl(target.host, target.port)}/api/sessions/${encodeURIComponent(command.sessionId)}`,
-    );
+    await runShowCommand(command);
+    return;
+  }
 
-    if (!response.ok) {
-      throw new Error(await readErrorBody(response));
-    }
-
-    const session = (await response.json()) as Session;
-    console.log(JSON.stringify(session, null, 2));
+  if (command.kind === 'export') {
+    await runExportCommand(command);
     return;
   }
 
@@ -1350,44 +1083,7 @@ export const runCli = async (args: string[]): Promise<void> => {
     parsedArgs.configFilePath,
   );
 
-  const runtime = createCliRuntime({
-    ...parsedArgs.runtimeOptions,
-    config: resolvedConfig,
-    maxSessions: resolvedConfig.storage.memory.maxSessions,
-    privacy: resolvedConfig.privacy,
-    observationPort: resolvedConfig.ui.port,
-    host: resolvedConfig.proxy.host,
-    port: resolvedConfig.proxy.port,
-  });
-  await runtime.start();
-
-  let isStopping = false;
-
-  const stop = async (): Promise<void> => {
-    if (isStopping) {
-      return;
-    }
-
-    isStopping = true;
-    await runtime.stop();
-  };
-
-  const signalHandlers = new Map<(typeof EXIT_SIGNALS)[number], () => void>();
-
-  for (const signal of EXIT_SIGNALS) {
-    const handler = () => {
-      void stop().finally(() => {
-        process.exit(0);
-      });
-    };
-
-    signalHandlers.set(signal, handler);
-    process.once(signal, handler);
-  }
-
-  process.once('beforeExit', () => {
-    void stop();
-  });
+  await runStartCommand(parsedArgs, resolvedConfig, createCliRuntime);
 };
 
 const isMainModule =
