@@ -3,15 +3,20 @@ import { URL } from 'node:url';
 
 import type { SessionStore } from '@llmscope/core';
 import type { ResolvedConfig } from '@llmscope/config';
-import type { ListSessionsQuery, SessionStatus } from '@llmscope/shared-types';
-
 import {
   getExportContentType,
-  loadExportSessions,
   serializeExport,
   type ExportFormat,
   type ExportRequest,
-} from './export.js';
+} from '@llmscope/replay';
+import type { ListSessionsQuery, SessionStatus } from '@llmscope/shared-types';
+
+import { loadExportSessions } from './export.js';
+import {
+  getReplayContentType,
+  isReplayFormat,
+  renderReplay,
+} from './replay.js';
 
 const sendJson = (
   response: ServerResponse,
@@ -279,6 +284,31 @@ export const handleObservationRequest = async (
     }
 
     sendMethodNotAllowed(response);
+    return;
+  }
+
+  const replayMatch = /^\/api\/sessions\/([^/]+)\/replay$/.exec(requestUrl.pathname);
+  if (replayMatch !== null) {
+    if (request.method !== 'GET') {
+      sendMethodNotAllowed(response);
+      return;
+    }
+
+    const sessionId = decodeURIComponent(replayMatch[1] ?? '');
+    const format = requestUrl.searchParams.get('format');
+
+    if (!isReplayFormat(format)) {
+      sendBadRequest(
+        response,
+        'Replay format must be one of curl, fetch, openai, or anthropic.',
+      );
+      return;
+    }
+
+    const payload = await renderReplay(options.store, sessionId, { format });
+    response.statusCode = 200;
+    response.setHeader('content-type', getReplayContentType());
+    response.end(payload);
     return;
   }
 

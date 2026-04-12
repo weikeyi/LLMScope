@@ -20,6 +20,7 @@ import {
   openAiChatCompletionsPlugin,
   openAiResponsesPlugin,
 } from '@llmscope/proxy-engine';
+import type { ExportFormat } from '@llmscope/replay';
 import type {
   InspectorError,
   ListSessionsQuery,
@@ -39,7 +40,6 @@ import { resolveCommandConfig } from './commands/shared.js';
 import { runShowCommand } from './commands/show.js';
 import { runStartCommand } from './commands/start.js';
 import { createObservationServer, type ObservationServer } from './server/http.js';
-import type { ExportFormat } from './server/export.js';
 
 export interface CliRuntimeOptions {
   upstreamUrl?: string;

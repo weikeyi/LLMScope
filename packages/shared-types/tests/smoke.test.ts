@@ -3,6 +3,8 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import type {
   CanonicalMessage,
   Session,
+  SessionExportFormat,
+  SessionReplayFormat,
   SessionSummary,
   WsEvent,
 } from '../src/index.js';
@@ -103,6 +105,12 @@ describe('@llmscope/shared-types', () => {
 
     expectTypeOf(session.status).toEqualTypeOf<
       'pending' | 'streaming' | 'completed' | 'error'
+    >();
+    expectTypeOf<SessionExportFormat>().toEqualTypeOf<
+      'json' | 'ndjson' | 'markdown'
+    >();
+    expectTypeOf<SessionReplayFormat>().toEqualTypeOf<
+      'curl' | 'fetch' | 'openai' | 'anthropic'
     >();
 
     if (event.type === 'session:error') {

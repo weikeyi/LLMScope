@@ -1,3 +1,5 @@
+import type { ExportFormat } from '@llmscope/replay';
+
 import {
   buildObservationBaseUrl,
   readErrorBody,
@@ -13,7 +15,7 @@ export const runExportCommand = async (command: {
     port?: number;
   };
   sessionId?: string;
-  format: 'json' | 'ndjson' | 'markdown';
+  format: ExportFormat;
   outputPath?: string;
   query: {
     status?: string;

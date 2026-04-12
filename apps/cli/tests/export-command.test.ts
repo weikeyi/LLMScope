@@ -399,4 +399,77 @@ describe('@llmscope/cli export flows', () => {
       await upstreamAddress.close();
     }
   });
+
+  it('redacts captured secrets from exported artifacts by default', async () => {
+    const upstream = createServer(
+      async (request: IncomingMessage, response: ServerResponse) => {
+        const body = await readBody(request);
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            ok: true,
+            body: JSON.parse(body),
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer top-secret-token',
+          'x-api-key': 'sk-hidden',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-secret',
+          messages: [{ role: 'user', content: 'hide my key' }],
+        }),
+      });
+
+      const exportResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/export`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            format: 'json',
+            query: {
+              status: 'completed',
+            },
+          }),
+        },
+      );
+      const exportText = await exportResponse.text();
+
+      expect(exportResponse.status).toBe(200);
+      expect(exportText).toContain('"authorization": "[redacted]"');
+      expect(exportText).toContain('"x-api-key": "[redacted]"');
+      expect(exportText).not.toContain('top-secret-token');
+      expect(exportText).not.toContain('sk-hidden');
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
 });

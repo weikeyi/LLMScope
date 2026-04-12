@@ -820,6 +820,76 @@ describe('@llmscope/cli observation api', () => {
     }
   });
 
+  it('renders replay artifacts for captured sessions without exposing secrets', async () => {
+    const upstream = createServer(
+      async (request: IncomingMessage, response: ServerResponse) => {
+        const body = await readBody(request);
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            id: 'resp-replay',
+            echoed: JSON.parse(body),
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer replay-secret-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-replay',
+          messages: [{ role: 'user', content: 'show replay' }],
+        }),
+      });
+
+      const summariesResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?limit=1`,
+      );
+      const summaries = (await summariesResponse.json()) as Array<{ id: string }>;
+      const sessionId = summaries[0]?.id;
+
+      if (sessionId === undefined) {
+        throw new Error('Expected one captured session.');
+      }
+
+      const replayResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessionId}/replay?format=openai`,
+      );
+      const replayText = await replayResponse.text();
+
+      expect(replayResponse.status).toBe(200);
+      expect(replayResponse.headers.get('content-type')).toContain('text/plain');
+      expect(replayText).toContain('process.env.OPENAI_API_KEY');
+      expect(replayText).not.toContain('replay-secret-token');
+      expect(replayText).toContain("model: 'gpt-replay'");
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
   it('reports Anthropic messages sessions in observation detail', async () => {
     const upstream = createServer(
       (_request: IncomingMessage, response: ServerResponse) => {

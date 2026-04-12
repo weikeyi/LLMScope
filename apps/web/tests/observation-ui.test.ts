@@ -155,6 +155,70 @@ const fixtureDetail: Session = {
   warnings: ['normalized output omitted finish reason'],
 };
 
+const fixtureComparisonDetail: Session = {
+  id: 'session-2',
+  status: 'streaming',
+  startedAt: '2026-03-15T12:00:00.000Z',
+  endedAt: '2026-03-15T12:00:00.140Z',
+  transport: {
+    mode: 'proxy',
+    protocol: 'http',
+    method: 'POST',
+    url: 'http://127.0.0.1:8788/v1/chat/completions',
+    host: '127.0.0.1:8788',
+    path: '/v1/chat/completions',
+    statusCode: 429,
+    durationMs: 140,
+    firstByteAtMs: 30,
+  },
+  routing: {
+    upstreamBaseUrl: 'http://127.0.0.1:9000',
+    routeId: 'default',
+    matchedProvider: 'openai',
+    matchedEndpoint: 'chat.completions',
+    confidence: 0.99,
+  },
+  request: {
+    headers: {
+      authorization: 'Bearer comparison-secret',
+      'content-type': 'application/json',
+    },
+    contentType: 'application/json',
+    sizeBytes: 53,
+    bodyJson: {
+      model: 'gpt-4.1',
+      messages: [{ role: 'user', content: 'Hello again' }],
+    },
+  },
+  response: {
+    headers: {
+      'content-type': 'application/json',
+    },
+    contentType: 'application/json',
+    sizeBytes: 72,
+    bodyJson: {
+      id: 'resp-2',
+      error: { message: 'rate limited' },
+    },
+  },
+  normalized: {
+    provider: 'openai',
+    apiStyle: 'chat.completions',
+    model: 'gpt-4.1',
+    stream: false,
+    inputMessages: [
+      {
+        role: 'user',
+        parts: [{ type: 'text', text: 'Hello again' }],
+      },
+    ],
+    output: {
+      text: 'rate limited',
+    },
+  },
+  warnings: ['retry suggested'],
+};
+
 const createObservationApiServer = async (): Promise<string> => {
   const server = createServer(
     (request: IncomingMessage, response: ServerResponse) => {
@@ -171,6 +235,13 @@ const createObservationApiServer = async (): Promise<string> => {
         response.statusCode = 200;
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify(fixtureDetail));
+        return;
+      }
+
+      if (url.pathname === '/api/sessions/session-2') {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify(fixtureComparisonDetail));
         return;
       }
 
@@ -236,6 +307,41 @@ describe('@llmscope/web observation ui', () => {
     expect(data.error).toBeUndefined();
   });
 
+  it('loads previous-session comparisons and replay snippets for the selected session', async () => {
+    const apiBaseUrl = await createObservationApiServer();
+    const data = (await loadObservationPageData({
+      apiBaseUrl,
+      selectedSessionId: 'session-1',
+      compareMode: 'previous',
+    } as never)) as {
+      comparison?: {
+        mode: string;
+        compareSessionId: string;
+        diff: { changes: Array<{ path: string }> };
+      };
+      replayArtifacts?: Array<{ format: string; content: string }>;
+    };
+
+    expect(data.comparison?.mode).toBe('previous');
+    expect(data.comparison?.compareSessionId).toBe('session-2');
+    expect(data.comparison?.diff.changes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'transport.statusCode' }),
+        expect.objectContaining({ path: 'normalized.model' }),
+      ]),
+    );
+    expect(data.replayArtifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ format: 'curl' }),
+        expect.objectContaining({ format: 'fetch' }),
+        expect.objectContaining({ format: 'openai' }),
+      ]),
+    );
+    expect(data.replayArtifacts?.[0]?.content).not.toContain(
+      'comparison-secret',
+    );
+  });
+
   it('renders a read-only list and detail view for sessions', () => {
     const markup = renderObservationPage({
       apiBaseUrl: 'http://127.0.0.1:8788',
@@ -262,6 +368,9 @@ describe('@llmscope/web observation ui', () => {
     expect(markup).toContain('Export selected');
     expect(markup).toContain('This permanently deletes the selected session.');
     expect(markup).toContain('This permanently deletes every captured session.');
+    expect(markup).toContain('Compare with previous session');
+    expect(markup).toContain('Replay snippets');
+    expect(markup).toContain('compareTo=session-2');
     expect(markup).toContain('Loading observation UI...');
     expect(markup).toContain('sessionId=session-1');
   });

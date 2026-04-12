@@ -94,6 +94,10 @@ export const getStatusTone = (
 export const toPageUrl = (
   filters: ObservationFilters,
   selectedSessionId?: string,
+  options?: {
+    compareMode?: 'previous';
+    compareToSessionId?: string;
+  },
 ): string => {
   const url = new URL('http://llmscope.local/');
 
@@ -119,6 +123,14 @@ export const toPageUrl = (
     url.searchParams.set('sessionId', selectedSessionId);
   }
 
+  if (options?.compareMode === 'previous') {
+    url.searchParams.set('compare', 'previous');
+  }
+
+  if (options?.compareToSessionId !== undefined) {
+    url.searchParams.set('compareTo', options.compareToSessionId);
+  }
+
   const search = url.searchParams.toString();
   return search.length > 0 ? `/?${search}` : '/';
 };
@@ -134,4 +146,3 @@ export const renderErrorPanel = (error: InspectorError | undefined): string => {
     ['message', error.message],
   ])}${error.details === undefined ? '' : `<div><h4>Details</h4><pre>${escapeHtml(formatJson(error.details))}</pre></div>`}</section>`;
 };
-

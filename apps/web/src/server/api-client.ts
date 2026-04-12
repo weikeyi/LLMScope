@@ -1,3 +1,8 @@
+import {
+  diffSessions,
+  generateReplay,
+  type ReplayFormat,
+} from '@llmscope/replay';
 import type { Session, SessionSummary } from '@llmscope/shared-types';
 
 import type {
@@ -107,12 +112,58 @@ const loadSessionDetail = async (
   return parseJsonResponse<Session>(response);
 };
 
+const getReplayFormats = (session: Session): ReplayFormat[] => {
+  const provider = session.normalized?.provider;
+
+  if (provider === 'anthropic') {
+    return ['curl', 'fetch', 'anthropic'];
+  }
+
+  if (provider === 'openai') {
+    return ['curl', 'fetch', 'openai'];
+  }
+
+  return ['curl', 'fetch'];
+};
+
+const getReplayLabel = (format: ReplayFormat): string => {
+  if (format === 'curl') {
+    return 'curl';
+  }
+
+  if (format === 'fetch') {
+    return 'fetch';
+  }
+
+  if (format === 'openai') {
+    return 'OpenAI SDK';
+  }
+
+  return 'Anthropic SDK';
+};
+
+const resolvePreviousSessionId = (
+  sessions: SessionSummary[],
+  selectedSessionId: string,
+): string | null => {
+  const selectedIndex = sessions.findIndex(
+    (session) => session.id === selectedSessionId,
+  );
+
+  if (selectedIndex <= 0) {
+    return null;
+  }
+
+  return sessions[selectedIndex - 1]?.id ?? null;
+};
+
 export const loadObservationPageData = async (
   options: ObservationUiOptions,
 ): Promise<ObservationPageData> => {
   const filters = toObservationFilters(options);
   let sessions: SessionSummary[] = [];
   let selectedSession: Session | null = null;
+  let comparison: ObservationPageData['comparison'] = null;
   let error: string | undefined;
 
   try {
@@ -162,7 +213,61 @@ export const loadObservationPageData = async (
     selectedSessionId,
     sessions,
     selectedSession,
+    replayArtifacts:
+      selectedSession === null
+        ? []
+        : getReplayFormats(selectedSession).map((format) => ({
+            format,
+            label: getReplayLabel(format),
+            content: generateReplay(selectedSession, { format }),
+          })),
   };
+
+  let compareSessionId: string | null = null;
+  let comparisonMode: 'previous' | 'selected' | null = null;
+
+  if (selectedSessionId !== null) {
+    if (
+      options.compareToSessionId !== undefined &&
+      options.compareToSessionId !== selectedSessionId
+    ) {
+      compareSessionId = options.compareToSessionId;
+      comparisonMode = 'selected';
+    } else if (options.compareMode === 'previous') {
+      compareSessionId = resolvePreviousSessionId(sessions, selectedSessionId);
+      comparisonMode = compareSessionId === null ? null : 'previous';
+    }
+  }
+
+  if (
+    selectedSession !== null &&
+    compareSessionId !== null &&
+    comparisonMode !== null &&
+    error === undefined
+  ) {
+    try {
+      const compareSession = await loadSessionDetail(
+        options.apiBaseUrl,
+        compareSessionId,
+      );
+
+      if (compareSession !== null) {
+        comparison = {
+          mode: comparisonMode,
+          compareSessionId,
+          compareSession,
+          diff: diffSessions(compareSession, selectedSession),
+        };
+      }
+    } catch (comparisonError) {
+      error =
+        comparisonError instanceof Error
+          ? comparisonError.message
+          : `Could not load comparison session ${compareSessionId}.`;
+    }
+  }
+
+  data.comparison = comparison;
 
   if (error !== undefined) {
     data.error = error;
@@ -234,4 +339,3 @@ export const exportSessions = async (
     body: await response.text(),
   };
 };
-

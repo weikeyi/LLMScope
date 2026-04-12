@@ -1,12 +1,18 @@
+import {
+  generateReplay,
+  type ReplayFormat,
+} from '@llmscope/replay';
 import type {
   CanonicalMessage,
   CanonicalPart,
   CanonicalStreamEvent,
   RawHttpMessage,
-  Session,
 } from '@llmscope/shared-types';
 
+import type { ObservationPageData } from '../types.js';
 import { renderDetailActions } from './actions.js';
+import { renderDiffView } from './diff-view.js';
+import { renderReplayView } from './replay-view.js';
 import {
   escapeHtml,
   formatDateTime,
@@ -118,11 +124,59 @@ const renderStreamEvents = (
   </table></div></section>`;
 };
 
-export const renderSelectedSession = (session: Session | null): string => {
-  if (session === null) {
+const getReplayFormats = (
+  session: NonNullable<ObservationPageData['selectedSession']>,
+): ReplayFormat[] => {
+  const provider = session.normalized?.provider;
+
+  if (provider === 'anthropic') {
+    return ['curl', 'fetch', 'anthropic'];
+  }
+
+  if (provider === 'openai') {
+    return ['curl', 'fetch', 'openai'];
+  }
+
+  return ['curl', 'fetch'];
+};
+
+const getReplayLabel = (format: ReplayFormat): string => {
+  if (format === 'curl') {
+    return 'curl';
+  }
+
+  if (format === 'fetch') {
+    return 'fetch';
+  }
+
+  if (format === 'openai') {
+    return 'OpenAI SDK';
+  }
+
+  return 'Anthropic SDK';
+};
+
+export const renderSelectedSession = (options: {
+  comparison?: ObservationPageData['comparison'];
+  filters: ObservationPageData['filters'];
+  replayArtifacts?: ObservationPageData['replayArtifacts'];
+  selectedSession: ObservationPageData['selectedSession'];
+  selectedSessionId: ObservationPageData['selectedSessionId'];
+  sessions: ObservationPageData['sessions'];
+}): string => {
+  if (options.selectedSession === null) {
     return `<section class="panel detail-empty"><h2>Session detail</h2><p class="empty-state">Select a session to inspect transport, normalized data, and raw payloads.</p></section>`;
   }
 
+  const session = options.selectedSession;
+  const replayArtifacts =
+    options.replayArtifacts === undefined
+      ? getReplayFormats(session).map((format) => ({
+          format,
+          label: getReplayLabel(format),
+          content: generateReplay(session, { format }),
+        }))
+      : options.replayArtifacts;
   const normalizedSections: string[] = [];
   if (session.normalized !== undefined) {
     normalizedSections.push(
@@ -200,9 +254,15 @@ export const renderSelectedSession = (session: Session | null): string => {
     </section>
     ${renderErrorPanel(session.error)}
     <section class="panel"><h3>Normalized exchange</h3>${normalizedSections.length > 0 ? normalizedSections.join('') : '<p class="empty-state">No normalized exchange available.</p>'}</section>
+    ${renderDiffView({
+      comparison: options.comparison,
+      filters: options.filters,
+      selectedSessionId: options.selectedSessionId,
+      sessions: options.sessions,
+    })}
+    ${renderReplayView(replayArtifacts)}
     ${renderRawHttpMessage('Request', session.request)}
     ${renderRawHttpMessage('Response', session.response)}
     ${renderStreamEvents(session.streamEvents)}
   </section>`;
 };
-

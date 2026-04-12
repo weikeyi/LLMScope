@@ -50,6 +50,15 @@ const toQueryOptions = (
     options.selectedSessionId = selectedSessionId;
   }
 
+  if (requestUrl.searchParams.get('compare') === 'previous') {
+    options.compareMode = 'previous';
+  }
+
+  const compareToSessionId = requestUrl.searchParams.get('compareTo');
+  if (compareToSessionId !== null && compareToSessionId.length > 0) {
+    options.compareToSessionId = compareToSessionId;
+  }
+
   const status = toSessionStatus(requestUrl.searchParams.get('status'));
   if (status !== undefined) {
     options.status = status;

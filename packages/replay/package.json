@@ -1,12 +1,9 @@
 {
-  "name": "@llmscope/web",
+  "name": "@llmscope/replay",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
-  "bin": {
-    "llmscope-web": "./dist/index.js"
-  },
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
@@ -17,10 +14,10 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --project tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests",
-    "lint": "eslint src"
+    "test": "vitest run",
+    "lint": "eslint src tests"
   },
   "dependencies": {
-    "@llmscope/replay": "workspace:*"
+    "@llmscope/shared-types": "workspace:*"
   }
 }

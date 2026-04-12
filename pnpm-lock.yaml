@@ -44,6 +44,9 @@ importers:
       '@llmscope/proxy-engine':
         specifier: workspace:*
         version: link:../../packages/proxy-engine
+      '@llmscope/replay':
+        specifier: workspace:*
+        version: link:../../packages/replay
       '@llmscope/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
@@ -54,7 +57,11 @@ importers:
         specifier: workspace:*
         version: link:../../packages/storage-sqlite
 
-  apps/web: {}
+  apps/web:
+    dependencies:
+      '@llmscope/replay':
+        specifier: workspace:*
+        version: link:../../packages/replay
 
   packages/config:
     dependencies:
@@ -86,6 +93,12 @@ importers:
       '@llmscope/storage-memory':
         specifier: workspace:*
         version: link:../storage-memory
+
+  packages/replay:
+    dependencies:
+      '@llmscope/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/shared-types: {}
 

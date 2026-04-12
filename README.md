@@ -8,14 +8,14 @@ As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runt
 
 - config-driven CLI startup with config file discovery
 - CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`, `export`
-- observation API for health, config, summaries, detail, export, delete, clear, and live WebSocket events
-- server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, live updates, empty, and error states
+- observation API for health, config, summaries, detail, export, replay, delete, clear, and live WebSocket events
+- server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, diff, replay, live updates, empty, and error states
 - provider-aware normalization for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
+- shared export, diff, and replay artifact generation in `packages/replay`
 - privacy modes and SQLite-backed persistence
 
 The complete product contract is broader than the current implementation. Still planned:
 
-- diff and replay workflows
 - internal package extraction for registry, SSE parsing, and redaction
 - runtime hardening, release engineering, and OSS packaging
 
@@ -34,8 +34,9 @@ The repository is a pnpm workspace monorepo with these active ownership points:
 
 - `apps/cli`: runtime entrypoint, command surface, observation API host
 - `apps/cli/src/commands/*`: command execution modules
-- `apps/cli/src/server/*`: observation HTTP routes and export serialization
+- `apps/cli/src/server/*`: observation HTTP routes, export loading, and replay helpers
 - `apps/web`: observation UI server, API client modules, and HTML rendering
+- `packages/replay`: shared export serialization, session diffing, and replay snippet generation
 - `packages/config`: config loading, override merging, runtime validation
 - `packages/proxy-engine`: proxying, capture, normalization, privacy-adjacent runtime logic
 - `packages/storage-memory` and `packages/storage-sqlite`: session persistence
@@ -106,8 +107,8 @@ node apps/cli/dist/index.js export --config ./llmscope.yaml --status completed -
 
 Supported export formats:
 
-- `json`: one full session object or a JSON array of sessions
-- `ndjson`: one full session per line
+- `json`: one full session object or a JSON array of sessions, with captured secrets redacted by default
+- `ndjson`: one full session per line, with the same default redaction policy
 - `markdown`: operator-friendly Markdown export for inspection and sharing
 
 Run the observation UI:

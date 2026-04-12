@@ -22,8 +22,8 @@ These commands are the current engineering baseline for milestone work.
 
 - LLMScope already has a runnable local inspector core: config loading, proxying, capture, normalization, privacy modes, and SQLite persistence are implemented.
 - The CLI now acts as the main operator surface for `start`, `doctor`, `list`, `show`, `clear`, and `export`.
-- The Web layer now covers the core operator workflow surface for inspect, filter, refresh, delete, clear, export, and live reconciliation.
-- The largest remaining gaps are diff/replay product workflows, internal package extraction, runtime hardening, and release engineering.
+- The Web layer now covers the core operator workflow surface for inspect, filter, refresh, delete, clear, export, diff, replay, and live reconciliation.
+- The largest remaining gaps are internal package extraction beyond `packages/replay`, runtime hardening, and release engineering.
 
 ## Milestone Status
 
@@ -33,7 +33,7 @@ These commands are the current engineering baseline for milestone work.
 | 2. Complete the CLI product surface | Completed in current branch | `export` is implemented, `/api/config` and `/api/sessions/export` exist, doctor checks the daily-use SQLite path, and CLI/server ownership is split into dedicated modules |
 | 3. Upgrade the Web UI into an interactive app | Completed in current branch | The UI supports URL-backed filters and selection, refresh, delete, clear, export, and stronger empty/error/loading states, with server and UI code split into dedicated modules |
 | 4. Add real-time product behavior | Completed in current branch | The observation API now exposes `/ws`, stream and session lifecycle events are fanned out live, and the Web UI reconciles list/detail state through fragment refreshes without page reload |
-| 5. Deliver export, diff, and replay workflows | Not started | No shared replay/export package or diff UI yet |
+| 5. Deliver export, diff, and replay workflows | Completed in current branch | `packages/replay` now owns shared export serialization, session diffing, and replay generation; the observation API exposes replay artifacts; the Web UI renders diff and replay views |
 | 6. Extract runtime concerns into dedicated packages | Not started | SSE parsing, redaction, and provider registry still live inside current packages |
 | 7. Runtime hardening, error taxonomy, and daily-use persistence | Partial foundation delivered | Config resolution, SQLite storage, privacy modes, and doctor checks exist; shared error taxonomy, timeout/backpressure controls, and stronger operability checks are still missing |
 | 8. Release engineering and public OSS baseline | Not started | No Playwright, CI workflow, Changesets, or OSS policy docs yet |
@@ -52,33 +52,34 @@ These commands are the current engineering baseline for milestone work.
 
 - `packages/shared-types`: canonical session, stream event, warning, and error-related domain types
 - `packages/core`: provider, routing, storage, and proxy engine contracts
+- `packages/replay`: redaction-aware export serialization, structured session diffs, and replay code generation for `curl`, `fetch`, OpenAI SDK, and Anthropic SDK
 
 ### CLI and observation API
 
 - `apps/cli`: runtime startup and shutdown, `start`, `doctor`, `list`, `show`, `clear`, and `export`
 - `apps/cli/src/commands/*`: command execution split by operator workflow
-- `apps/cli/src/server/*`: observation HTTP server, WebSocket fanout, routes, and export serialization
-- Current API surface: health, config, session list, session detail, session export, single-session delete, clear-all, and `/ws` live events
+- `apps/cli/src/server/*`: observation HTTP server, WebSocket fanout, routes, export loading, and replay helpers
+- Current API surface: health, config, session list, session detail, session export, session replay, single-session delete, clear-all, and `/ws` live events
 
 ### Web observation surface
 
 - `apps/web`: server-rendered observation UI with modular server and UI ownership
 - `apps/web/src/server/*`: request parsing, API calls, and server startup
-- `apps/web/src/ui/*`: layout, filters, action controls, live-store wiring, session list, and detail rendering
-- Current UI surface: session list, provider/model/status/search filters, URL-backed selection, refresh, single-session delete, clear-all, export, live session updates, raw request/response display, normalized exchange display, stream event timeline, empty state, and error state
+- `apps/web/src/ui/*`: layout, filters, action controls, live-store wiring, session list, diff view, replay view, and detail rendering
+- Current UI surface: session list, provider/model/status/search filters, URL-backed selection, refresh, single-session delete, clear-all, export, diff, replay, live session updates, raw request/response display, normalized exchange display, stream event timeline, empty state, and error state
 
 ## Highest-Priority Gaps
 
-1. Diff and replay remain product-level gaps even though export is now present in both CLI and Web surfaces.
-2. Runtime concerns are still concentrated in large core packages. Extraction should happen only after the next operator workflows are stable.
-3. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
+1. Runtime concerns are still concentrated in large core packages. Extraction should continue with provider registry, SSE parsing, and redaction.
+2. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
+3. Runtime hardening work is still needed for timeout/backpressure controls, shared error taxonomy, and stronger SQLite operability checks.
 4. The roadmap's historical `pnpm test -- --runInBand` note is no longer a valid root command with the current Turbo/Vitest scripts; the verified repo-level commands are `pnpm test` and `pnpm typecheck`.
 
 ## Next Execution Target
 
-After Milestone 4 exits green, the next delivery target is Milestone 5:
+After Milestone 5 exits green, the next delivery target is Milestone 6:
 
-- extract shared export, diff, and replay artifact generation into `packages/replay`
-- add first-class diff and replay views on top of the captured-session surface
-- keep CLI and Web export behavior aligned on the same artifact rules
+- extract provider registry composition out of `packages/proxy-engine`
+- extract reusable SSE parsing and redaction rules into dedicated packages
+- add generic OpenAI-compatible provider support without regressing existing provider-specific paths
 - keep `pnpm test` and `pnpm typecheck` green throughout

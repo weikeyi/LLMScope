@@ -35,6 +35,9 @@ export default defineConfig({
       '@llmscope/proxy-engine': fileURLToPath(
         new URL('./packages/proxy-engine/src/index.ts', import.meta.url),
       ),
+      '@llmscope/replay': fileURLToPath(
+        new URL('./packages/replay/src/index.ts', import.meta.url),
+      ),
       '@llmscope/shared-types': fileURLToPath(
         new URL('./packages/shared-types/src/index.ts', import.meta.url),
       ),

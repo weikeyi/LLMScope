@@ -24,8 +24,16 @@ const renderSessionRow = (
   const model = session.model ?? '-';
   const provider = session.provider ?? '-';
   const statusCode = formatStatusCode(session.statusCode, session.errorCode);
+  const compareLink =
+    selectedSessionId !== null && !isSelected
+      ? `<a class="secondary-action session-compare-link" href="${escapeHtml(
+          toPageUrl(filters, selectedSessionId, {
+            compareToSessionId: session.id,
+          }),
+        )}">Compare</a>`
+      : '';
 
-  return `<li><a class="${rowClassName}" data-session-link="true" href="${escapeHtml(
+  return `<li class="session-list-item"><a class="${rowClassName}" data-session-link="true" href="${escapeHtml(
     toPageUrl(filters, session.id),
   )}">
     <div class="session-row-header">
@@ -39,7 +47,7 @@ const renderSessionRow = (
       <span>${escapeHtml(formatDuration(session.durationMs))}</span>
     </div>
     <div class="session-row-timestamp">${escapeHtml(formatDateTime(session.startedAt))}</div>
-  </a></li>`;
+  </a>${compareLink}</li>`;
 };
 
 export const renderSessionList = (
@@ -66,4 +74,3 @@ export const renderSessionList = (
     <p>Adjust the filters or refresh to look for new traffic.</p>
   </div>`;
 };
-

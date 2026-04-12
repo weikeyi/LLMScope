@@ -20,9 +20,9 @@
   "dependencies": {
     "@llmscope/config": "workspace:*",
     "@llmscope/proxy-engine": "workspace:*",
+    "@llmscope/replay": "workspace:*",
     "@llmscope/shared-types": "workspace:*",
     "@llmscope/storage-memory": "workspace:*",
     "@llmscope/storage-sqlite": "workspace:*"
   }
 }
-

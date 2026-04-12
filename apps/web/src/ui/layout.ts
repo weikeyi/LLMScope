@@ -32,7 +32,14 @@ export const renderObservationFragments = (
       data.selectedSessionId,
       data.error,
     ),
-    sessionDetailHtml: renderSelectedSession(data.selectedSession),
+    sessionDetailHtml: renderSelectedSession({
+      comparison: data.comparison,
+      filters: data.filters,
+      replayArtifacts: data.replayArtifacts,
+      selectedSession: data.selectedSession,
+      selectedSessionId: data.selectedSessionId,
+      sessions: data.sessions,
+    }),
     state: {
       apiBaseUrl: data.apiBaseUrl,
       filters: data.filters,
@@ -209,6 +216,10 @@ export const renderObservationPage = (data: ObservationPageData): string => {
       .subtle-link {
         margin-top: 12px;
       }
+      .session-compare-link {
+        align-self: center;
+        white-space: nowrap;
+      }
       .session-list {
         list-style: none;
         padding: 0;
@@ -217,9 +228,15 @@ export const renderObservationPage = (data: ObservationPageData): string => {
         flex-direction: column;
         gap: 12px;
       }
+      .session-list-item {
+        display: flex;
+        gap: 10px;
+        align-items: stretch;
+      }
       .session-row {
         display: block;
         width: 100%;
+        flex: 1 1 auto;
         border: 1px solid var(--line-soft);
         background: var(--bg-panel-strong);
         border-radius: 16px;
@@ -349,6 +366,16 @@ export const renderObservationPage = (data: ObservationPageData): string => {
       }
       .table-wrapper {
         overflow-x: auto;
+      }
+      .replay-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+      }
+      .replay-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
       }
       table {
         width: 100%;

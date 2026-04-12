@@ -1,8 +1,15 @@
-import type { Session, SessionStatus, SessionSummary } from '@llmscope/shared-types';
+import type { ReplayFormat, SessionDiffResult } from '@llmscope/replay';
+import type {
+  Session,
+  SessionStatus,
+  SessionSummary,
+} from '@llmscope/shared-types';
 
 export interface ObservationUiOptions {
   apiBaseUrl: string;
   selectedSessionId?: string;
+  compareMode?: 'previous';
+  compareToSessionId?: string;
   status?: SessionStatus;
   provider?: string;
   model?: string;
@@ -24,6 +31,17 @@ export interface ObservationPageData {
   selectedSessionId: string | null;
   sessions: SessionSummary[];
   selectedSession: Session | null;
+  comparison?: {
+    mode: 'previous' | 'selected';
+    compareSessionId: string;
+    compareSession: Session | null;
+    diff: SessionDiffResult;
+  } | null;
+  replayArtifacts?: Array<{
+    format: ReplayFormat;
+    label: string;
+    content: string;
+  }>;
   error?: string;
 }
 
@@ -38,4 +56,3 @@ export interface ObservationUiServer {
   stop(): Promise<void>;
   getAddress(): { host: string; port: number };
 }
-

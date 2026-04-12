@@ -1,4 +1,6 @@
 export type SessionStatus = 'pending' | 'streaming' | 'completed' | 'error';
+export type SessionExportFormat = 'json' | 'ndjson' | 'markdown';
+export type SessionReplayFormat = 'curl' | 'fetch' | 'openai' | 'anthropic';
 
 export type TransportMode = 'gateway' | 'proxy' | 'mitm';
 
@@ -201,4 +203,3 @@ export type WsEvent =
     }
   | { type: 'session:completed'; sessionId: string }
   | { type: 'session:error'; sessionId: string; error: InspectorError };
-

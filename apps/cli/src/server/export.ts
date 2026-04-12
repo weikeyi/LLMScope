@@ -1,14 +1,6 @@
 import type { SessionStore } from '@llmscope/core';
+import type { ExportRequest } from '@llmscope/replay';
 import type { ListSessionsQuery, Session } from '@llmscope/shared-types';
-
-export type ExportFormat = 'json' | 'ndjson' | 'markdown';
-
-export interface ExportRequest {
-  format: ExportFormat;
-  sessionId?: string;
-  sessionIds?: string[];
-  query?: ListSessionsQuery;
-}
 
 const getSessionOrThrow = async (
   store: SessionStore,
@@ -63,52 +55,4 @@ export const loadExportSessions = async (
   }
 
   return loadSessionsFromQuery(store, request.query ?? {});
-};
-
-const renderMarkdownSession = (session: Session): string => {
-  return [
-    `## Session ${session.id}`,
-    '',
-    `- Method: ${session.transport.method}`,
-    `- Path: ${session.transport.path}`,
-    `- Status: ${session.status}`,
-    `- Provider: ${session.normalized?.provider ?? 'unknown'}`,
-    `- API style: ${session.normalized?.apiStyle ?? 'unknown'}`,
-    `- Model: ${session.normalized?.model ?? 'unknown'}`,
-    '',
-    '```json',
-    JSON.stringify(session, null, 2),
-    '```',
-  ].join('\n');
-};
-
-export const serializeExport = (
-  request: ExportRequest,
-  sessions: Session[],
-): string => {
-  if (request.format === 'json') {
-    return request.sessionId !== undefined
-      ? JSON.stringify(sessions[0] ?? null, null, 2)
-      : JSON.stringify(sessions, null, 2);
-  }
-
-  if (request.format === 'ndjson') {
-    return sessions.map((session) => JSON.stringify(session)).join('\n');
-  }
-
-  return ['# LLMScope Export', '', ...sessions.map(renderMarkdownSession)].join(
-    '\n',
-  );
-};
-
-export const getExportContentType = (format: ExportFormat): string => {
-  if (format === 'json') {
-    return 'application/json; charset=utf-8';
-  }
-
-  if (format === 'ndjson') {
-    return 'application/x-ndjson; charset=utf-8';
-  }
-
-  return 'text/markdown; charset=utf-8';
 };

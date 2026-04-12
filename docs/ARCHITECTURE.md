@@ -109,6 +109,11 @@ Milestone 4 adds:
 - `apps/cli/src/server/ws.ts`
 - live event fanout sourced from session lifecycle and stream-event writes
 
+Milestone 5 adds:
+
+- `apps/cli/src/server/replay.ts`
+- shared export serialization and replay generation delegated to `packages/replay`
+
 ### Web
 
 Milestone 3 split `apps/web/src/index.ts` into:
@@ -124,6 +129,12 @@ Milestone 4 adds:
 
 - `apps/web/src/ui/live-store.ts`
 - server-rendered fragment refreshes for list/detail reconciliation during live updates
+
+Milestone 5 adds:
+
+- `apps/web/src/ui/diff-view.ts`
+- `apps/web/src/ui/replay-view.ts`
+- URL-addressable session comparison and replay snippet rendering backed by `packages/replay`
 
 ## Transport Strategy
 
