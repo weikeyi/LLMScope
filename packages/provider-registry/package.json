@@ -1,5 +1,5 @@
 {
-  "name": "@llmscope/proxy-engine",
+  "name": "@llmscope/provider-registry",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -18,15 +18,6 @@
     "lint": "eslint src tests"
   },
   "dependencies": {
-    "@llmscope/core": "workspace:*",
-    "@llmscope/parser-sse": "workspace:*",
-    "@llmscope/provider-generic": "workspace:*",
-    "@llmscope/provider-registry": "workspace:*",
-    "@llmscope/redaction": "workspace:*",
-    "@llmscope/shared-types": "workspace:*",
-    "undici": "^7.16.0"
-  },
-  "devDependencies": {
-    "@llmscope/storage-memory": "workspace:*"
+    "@llmscope/core": "workspace:*"
   }
 }

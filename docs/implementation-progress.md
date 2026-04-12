@@ -8,11 +8,13 @@ This document is the repository truth source for current implementation status. 
 
 Verified locally on 2026-04-12:
 
-- `pnpm --filter @llmscope/cli test`: passing
+- `pnpm --filter @llmscope/provider-registry test`: passing
+- `pnpm --filter @llmscope/parser-sse test`: passing
+- `pnpm --filter @llmscope/redaction test`: passing
+- `pnpm --filter @llmscope/provider-generic test`: passing
+- `pnpm --filter @llmscope/proxy-engine test`: passing
+- `pnpm --filter @llmscope/proxy-engine typecheck`: passing
 - `pnpm --filter @llmscope/cli typecheck`: passing
-- built CLI smoke coverage for `start`, `doctor`, `list`, `show`, `clear`, and `export`: passing
-- `pnpm --filter @llmscope/web test`: passing
-- `pnpm --filter @llmscope/web typecheck`: passing
 - `pnpm test`: passing
 - `pnpm typecheck`: passing
 
@@ -23,7 +25,7 @@ These commands are the current engineering baseline for milestone work.
 - LLMScope already has a runnable local inspector core: config loading, proxying, capture, normalization, privacy modes, and SQLite persistence are implemented.
 - The CLI now acts as the main operator surface for `start`, `doctor`, `list`, `show`, `clear`, and `export`.
 - The Web layer now covers the core operator workflow surface for inspect, filter, refresh, delete, clear, export, diff, replay, and live reconciliation.
-- The largest remaining gaps are internal package extraction beyond `packages/replay`, runtime hardening, and release engineering.
+- The largest remaining gaps are runtime hardening and release engineering.
 
 ## Milestone Status
 
@@ -34,7 +36,7 @@ These commands are the current engineering baseline for milestone work.
 | 3. Upgrade the Web UI into an interactive app | Completed in current branch | The UI supports URL-backed filters and selection, refresh, delete, clear, export, and stronger empty/error/loading states, with server and UI code split into dedicated modules |
 | 4. Add real-time product behavior | Completed in current branch | The observation API now exposes `/ws`, stream and session lifecycle events are fanned out live, and the Web UI reconciles list/detail state through fragment refreshes without page reload |
 | 5. Deliver export, diff, and replay workflows | Completed in current branch | `packages/replay` now owns shared export serialization, session diffing, and replay generation; the observation API exposes replay artifacts; the Web UI renders diff and replay views |
-| 6. Extract runtime concerns into dedicated packages | Not started | SSE parsing, redaction, and provider registry still live inside current packages |
+| 6. Extract runtime concerns into dedicated packages | Completed in current branch | `packages/provider-registry`, `packages/parser-sse`, `packages/redaction`, and `packages/provider-generic` now own match orchestration, SSE parsing, privacy shaping, and generic OpenAI-compatible support; `packages/proxy-engine` orchestrates those packages instead of owning them directly |
 | 7. Runtime hardening, error taxonomy, and daily-use persistence | Partial foundation delivered | Config resolution, SQLite storage, privacy modes, and doctor checks exist; shared error taxonomy, timeout/backpressure controls, and stronger operability checks are still missing |
 | 8. Release engineering and public OSS baseline | Not started | No Playwright, CI workflow, Changesets, or OSS policy docs yet |
 | 9. Optional MITM and local CA management | Deferred | Not started by design |
@@ -46,7 +48,11 @@ These commands are the current engineering baseline for milestone work.
 - `packages/config`: config file discovery, JSON/YAML loading, environment overrides, CLI overrides, runtime validation, and `ResolvedConfig`
 - `packages/storage-memory`: in-memory session storage, filtering, delete, clear, and LRU behavior
 - `packages/storage-sqlite`: SQLite-backed session persistence with list/detail/delete/clear operations
-- `packages/proxy-engine`: Node HTTP proxying, request/response capture, SSE passthrough, provider matching, normalization, and privacy-aware session detail shaping
+- `packages/proxy-engine`: Node HTTP proxying, request/response capture, normalization orchestration, and session lifecycle handling
+- `packages/provider-registry`: provider registration and confidence-based match orchestration
+- `packages/parser-sse`: reusable SSE framing and event parsing
+- `packages/redaction`: privacy policy translation and transport-independent message and stream redaction
+- `packages/provider-generic`: generic OpenAI-compatible request, response, and stream normalization
 
 ### Contracts and domain model
 
@@ -70,16 +76,15 @@ These commands are the current engineering baseline for milestone work.
 
 ## Highest-Priority Gaps
 
-1. Runtime concerns are still concentrated in large core packages. Extraction should continue with provider registry, SSE parsing, and redaction.
-2. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
-3. Runtime hardening work is still needed for timeout/backpressure controls, shared error taxonomy, and stronger SQLite operability checks.
-4. The roadmap's historical `pnpm test -- --runInBand` note is no longer a valid root command with the current Turbo/Vitest scripts; the verified repo-level commands are `pnpm test` and `pnpm typecheck`.
+1. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
+2. Runtime hardening work is still needed for timeout/backpressure controls, shared error taxonomy, and stronger SQLite operability checks.
+3. The roadmap's historical `pnpm test -- --runInBand` note is no longer a valid root command with the current Turbo/Vitest scripts; the verified repo-level commands are `pnpm test` and `pnpm typecheck`.
 
 ## Next Execution Target
 
-After Milestone 5 exits green, the next delivery target is Milestone 6:
+After Milestone 6 exits green, the next delivery target is Milestone 7:
 
-- extract provider registry composition out of `packages/proxy-engine`
-- extract reusable SSE parsing and redaction rules into dedicated packages
-- add generic OpenAI-compatible provider support without regressing existing provider-specific paths
+- harden timeout, concurrency, and backpressure behavior
+- introduce a shared `InspectorError` taxonomy through runtime, API, CLI, and Web
+- improve SQLite daily-use operability and doctor checks
 - keep `pnpm test` and `pnpm typecheck` green throughout

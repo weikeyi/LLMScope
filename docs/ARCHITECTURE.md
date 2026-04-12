@@ -61,9 +61,7 @@ It now also consumes live WebSocket fanout and server-rendered fragment refreshe
 - `packages/proxy-engine`
   - request forwarding
   - capture and normalization orchestration
-  - SSE handling
-  - privacy-adjacent shaping
-  - provider plugin composition
+  - session lifecycle handling
 - `packages/storage-memory`
   - volatile session storage
 - `packages/storage-sqlite`
@@ -72,6 +70,15 @@ It now also consumes live WebSocket fanout and server-rendered fragment refreshe
   - canonical domain model
 - `packages/core`
   - contracts and extension interfaces
+- `packages/provider-registry`
+  - provider registration and confidence-based match orchestration
+- `packages/parser-sse`
+  - reusable SSE framing and event parsing
+- `packages/redaction`
+  - privacy policy translation
+  - transport-independent redaction for request, response, and stream payloads
+- `packages/provider-generic`
+  - generic OpenAI-compatible request, response, and stream normalization
 
 ## Data Flow
 
@@ -81,17 +88,17 @@ It now also consumes live WebSocket fanout and server-rendered fragment refreshe
 4. The observation API reads and mutates stored sessions for CLI commands, the Web UI, and WebSocket subscribers.
 5. The Web server fetches observation data, serves fragment refresh payloads, and renders the current UI surface.
 
-## Planned Boundary Extractions
+## Extracted Shared Packages
 
-These boundaries should be introduced only after product workflows prove the interfaces are stable enough.
+The product surface work in Milestones 5 and 6 established stable enough boundaries to extract these shared packages:
 
-| Planned package | Responsibility | Trigger milestone |
+| Package | Responsibility | Delivery milestone |
 | --- | --- | --- |
+| `packages/replay` | Shared export, diff, and replay artifact generation | 5 |
 | `packages/provider-registry` | Provider registration and match orchestration | 6 |
 | `packages/parser-sse` | Reusable SSE parsing and event framing | 6 |
 | `packages/redaction` | Privacy and redaction rules independent of transport | 6 |
 | `packages/provider-generic` | Generic OpenAI-compatible provider support | 6 |
-| `packages/replay` | Shared export, diff, and replay artifact generation | 5 |
 
 ## Planned App-Level Decomposition
 

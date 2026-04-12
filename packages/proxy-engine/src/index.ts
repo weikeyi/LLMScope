@@ -10,7 +10,6 @@ import { Readable } from 'node:stream';
 
 import type {
   IncomingRequestMeta,
-  MatchContext,
   ParsedRequestResult,
   ParsedResponseResult,
   ParsedStreamEventResult,
@@ -21,6 +20,17 @@ import type {
   SessionStore,
 } from '@llmscope/core';
 import type { ResolvedPrivacyConfig } from '@llmscope/config';
+import { SseAccumulator, type SseMessage } from '@llmscope/parser-sse';
+import {
+  createProviderRegistry,
+  type MatchedProvider,
+} from '@llmscope/provider-registry';
+import {
+  redactMessage,
+  redactStreamEvent,
+  toPrivacyPolicy,
+  type PrivacyPolicy,
+} from '@llmscope/redaction';
 
 import type {
   CanonicalExchange,
@@ -32,6 +42,8 @@ import type {
 
 export {
   anthropicMessagesPlugin,
+  genericOpenAiChatCompletionsPlugin,
+  genericOpenAiResponsesPlugin,
   openAiChatCompletionsPlugin,
   openAiResponsesPlugin,
 } from './providers/index.js';
@@ -54,28 +66,10 @@ export interface ProxyEngineAddress {
   port: number;
 }
 
-interface SseMessage {
-  event?: string;
-  data: string[];
-}
-
-interface MatchedProvider {
-  plugin: ProviderPlugin;
-  provider: string;
-  apiStyle: string;
-  confidence: number;
-  reasons: string[];
-}
-
 interface StreamEventParseContext {
   request: IncomingRequestMeta;
   sessionId: string;
   sequence: number;
-}
-
-interface PrivacyPolicy {
-  redactSensitiveText: boolean;
-  redactImages: boolean;
 }
 
 const TEXT_CONTENT_TYPES = [
@@ -88,249 +82,6 @@ const TEXT_CONTENT_TYPES = [
 const DEFAULT_CAPTURE_BODY_BYTES = 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_SESSIONS = 100;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const REDACTED_TEXT = '[redacted]';
-const REDACTED_IMAGE_URL = 'data:,redacted';
-const SENSITIVE_HEADERS = new Set([
-  'authorization',
-  'proxy-authorization',
-  'cookie',
-  'set-cookie',
-  'x-api-key',
-]);
-const STRICT_TEXT_PATH_SEGMENTS = new Set([
-  'content',
-  'text',
-  'input',
-  'instructions',
-  'system',
-  'prompt',
-  'output_text',
-  'delta',
-  'arguments',
-  'contenttext',
-]);
-
-const toPrivacyPolicy = (privacy?: ResolvedPrivacyConfig): PrivacyPolicy => {
-  switch (privacy?.mode) {
-    case 'strict':
-      return {
-        redactSensitiveText: true,
-        redactImages: true,
-      };
-    case 'off':
-      return {
-        redactSensitiveText: false,
-        redactImages: false,
-      };
-    case 'balanced':
-    default:
-      return {
-        redactSensitiveText: false,
-        redactImages: false,
-      };
-  }
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-};
-
-const cloneValue = <T>(value: T): T => structuredClone(value);
-
-const isSensitivePath = (path: string[]): boolean => {
-  const normalizedPath = path.map((segment) => segment.toLowerCase());
-
-  if (normalizedPath.length === 0) {
-    return false;
-  }
-
-  const last = normalizedPath.at(-1);
-  if (last === undefined) {
-    return false;
-  }
-
-  if (SENSITIVE_HEADERS.has(last) || last === 'authorization') {
-    return true;
-  }
-
-  return normalizedPath.some((segment) => {
-    return (
-      segment.includes('authorization') ||
-      segment.includes('api_key') ||
-      segment.includes('apikey') ||
-      segment.includes('token') ||
-      segment.includes('secret') ||
-      segment.includes('password')
-    );
-  });
-};
-
-const shouldRedactStrictText = (path: string[]): boolean => {
-  return path.some((segment) =>
-    STRICT_TEXT_PATH_SEGMENTS.has(segment.toLowerCase()),
-  );
-};
-
-const applyRedactionReplacement = (
-  value: unknown,
-  replacement: unknown,
-): unknown => {
-  if (value === undefined) {
-    return value;
-  }
-
-  return replacement;
-};
-
-const redactValue = (
-  value: unknown,
-  path: string[],
-  policy: PrivacyPolicy,
-  warnings: string[],
-): unknown => {
-  if (typeof value === 'string') {
-    if (policy.redactSensitiveText && isSensitivePath(path)) {
-      warnings.push(`Redacted sensitive field at ${path.join('.')}.`);
-      return applyRedactionReplacement(value, REDACTED_TEXT);
-    }
-
-    if (policy.redactSensitiveText && shouldRedactStrictText(path)) {
-      warnings.push(`Redacted text field at ${path.join('.')}.`);
-      return applyRedactionReplacement(value, REDACTED_TEXT);
-    }
-
-    if (
-      policy.redactImages &&
-      path.at(-1)?.toLowerCase() === 'url' &&
-      path.includes('image_url')
-    ) {
-      warnings.push(`Redacted image URL at ${path.join('.')}.`);
-      return applyRedactionReplacement(value, REDACTED_IMAGE_URL);
-    }
-
-    return value;
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item, index) =>
-      redactValue(item, [...path, String(index)], policy, warnings),
-    );
-  }
-
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [
-        key,
-        redactValue(entry, [...path, key], policy, warnings),
-      ]),
-    );
-  }
-
-  return value;
-};
-
-const redactHeaders = (
-  headers: Record<string, string | string[]>,
-  policy: PrivacyPolicy,
-  warnings: string[],
-): Record<string, string | string[]> => {
-  if (!policy.redactSensitiveText) {
-    return headers;
-  }
-
-  return Object.fromEntries(
-    Object.entries(headers).map(([key, value]) => {
-      if (!isSensitivePath([key])) {
-        return [key, value];
-      }
-
-      warnings.push(`Redacted sensitive header ${key}.`);
-      return [
-        key,
-        Array.isArray(value) ? value.map(() => REDACTED_TEXT) : REDACTED_TEXT,
-      ];
-    }),
-  );
-};
-
-const redactMessage = (
-  message: RawHttpMessage,
-  target: 'request' | 'response',
-  policy: PrivacyPolicy,
-): { message: RawHttpMessage; warnings?: string[] } => {
-  const warnings: string[] = [];
-  const nextMessage: RawHttpMessage = {
-    ...message,
-    headers: redactHeaders(message.headers, policy, warnings),
-  };
-
-  if (
-    message.bodyText !== undefined &&
-    policy.redactSensitiveText &&
-    target === 'response'
-  ) {
-    nextMessage.bodyText = redactValue(
-      message.bodyText,
-      [target, 'bodyText'],
-      policy,
-      warnings,
-    ) as string;
-  }
-
-  if (message.bodyJson !== undefined) {
-    nextMessage.bodyJson = redactValue(
-      cloneValue(message.bodyJson),
-      [target, 'bodyJson'],
-      policy,
-      warnings,
-    );
-  }
-
-  return warnings.length === 0
-    ? { message: nextMessage }
-    : { message: nextMessage, warnings };
-};
-
-const redactStreamEvent = (
-  event: CanonicalStreamEvent,
-  policy: PrivacyPolicy,
-): { event: CanonicalStreamEvent; warnings?: string[] } => {
-  const warnings: string[] = [];
-  const nextEvent: CanonicalStreamEvent = {
-    ...event,
-  };
-
-  if (event.rawLine !== undefined && policy.redactSensitiveText) {
-    nextEvent.rawLine = redactValue(
-      event.rawLine,
-      ['stream-event', 'rawLine'],
-      policy,
-      warnings,
-    ) as string;
-  }
-
-  if (event.rawJson !== undefined) {
-    nextEvent.rawJson = redactValue(
-      cloneValue(event.rawJson),
-      ['stream-event', 'rawJson'],
-      policy,
-      warnings,
-    );
-  }
-
-  if (event.normalized !== undefined) {
-    nextEvent.normalized = redactValue(
-      cloneValue(event.normalized),
-      ['stream-event', 'normalized'],
-      policy,
-      warnings,
-    );
-  }
-
-  return warnings.length === 0
-    ? { event: nextEvent }
-    : { event: nextEvent, warnings };
-};
 
 const isTextContentType = (contentType?: string): boolean => {
   if (contentType === undefined) {
@@ -620,94 +371,6 @@ const toStreamEvent = (
   };
 };
 
-const selectProviderPlugin = (
-  plugins: ProviderPlugin[],
-  matchContext: MatchContext,
-): MatchedProvider | undefined => {
-  let bestMatch: MatchedProvider | undefined;
-
-  for (const plugin of plugins) {
-    const result = plugin.match(matchContext);
-
-    if (result === null) {
-      continue;
-    }
-
-    if (
-      bestMatch === undefined ||
-      result.confidence > bestMatch.confidence ||
-      (result.confidence === bestMatch.confidence &&
-        plugin.id < bestMatch.plugin.id)
-    ) {
-      bestMatch = {
-        plugin,
-        provider: result.provider,
-        apiStyle: result.apiStyle,
-        confidence: result.confidence,
-        reasons: result.reasons,
-      };
-    }
-  }
-
-  return bestMatch;
-};
-
-class SseAccumulator {
-  private buffer = '';
-
-  public push(chunk: Buffer): SseMessage[] {
-    this.buffer += chunk.toString('utf8');
-    const messages: SseMessage[] = [];
-
-    while (true) {
-      const separatorIndex = this.buffer.indexOf('\n\n');
-
-      if (separatorIndex === -1) {
-        break;
-      }
-
-      const frame = this.buffer.slice(0, separatorIndex);
-      this.buffer = this.buffer.slice(separatorIndex + 2);
-      const message = this.parseFrame(frame);
-
-      if (message !== null) {
-        messages.push(message);
-      }
-    }
-
-    return messages;
-  }
-
-  private parseFrame(frame: string): SseMessage | null {
-    const normalizedFrame = frame.replaceAll('\r', '');
-
-    if (normalizedFrame.length === 0) {
-      return null;
-    }
-
-    const message: SseMessage = { data: [] };
-
-    for (const line of normalizedFrame.split('\n')) {
-      if (line.startsWith(':')) {
-        continue;
-      }
-
-      if (line.startsWith('event:')) {
-        message.event = line.slice('event:'.length).trim();
-        continue;
-      }
-
-      if (line.startsWith('data:')) {
-        message.data.push(line.slice('data:'.length).trimStart());
-      }
-    }
-
-    return message.data.length === 0 && message.event === undefined
-      ? null
-      : message;
-  }
-}
-
 const writeHeaders = (
   response: ServerResponse,
   headers: Record<string, string | string[]>,
@@ -769,7 +432,7 @@ export class NodeProxyEngine implements ProxyEngine {
 
   private readonly store: SessionStore;
 
-  private readonly providerPlugins: ProviderPlugin[];
+  private readonly providerRegistry: ReturnType<typeof createProviderRegistry>;
 
   private server: Server | null = null;
 
@@ -788,7 +451,9 @@ export class NodeProxyEngine implements ProxyEngine {
     this.privacyPolicy = toPrivacyPolicy(options.privacy);
     this.routeResolver = options.routeResolver;
     this.store = options.store;
-    this.providerPlugins = options.providerPlugins ?? [];
+    this.providerRegistry = createProviderRegistry({
+      plugins: options.providerPlugins ?? [],
+    });
   }
 
   public async start(): Promise<void> {
@@ -917,7 +582,7 @@ export class NodeProxyEngine implements ProxyEngine {
         mergeWarnings(session.warnings, redactedRequest.warnings),
       );
 
-      const matchedProvider = selectProviderPlugin(this.providerPlugins, {
+      const matchedProvider = this.providerRegistry.match({
         request: requestMeta,
         requestBody: session.request.bodyJson,
       });

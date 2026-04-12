@@ -78,11 +78,40 @@ importers:
         specifier: workspace:*
         version: link:../shared-types
 
+  packages/parser-sse: {}
+
+  packages/provider-generic:
+    dependencies:
+      '@llmscope/core':
+        specifier: workspace:*
+        version: link:../core
+      '@llmscope/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
+
+  packages/provider-registry:
+    dependencies:
+      '@llmscope/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/proxy-engine:
     dependencies:
       '@llmscope/core':
         specifier: workspace:*
         version: link:../core
+      '@llmscope/parser-sse':
+        specifier: workspace:*
+        version: link:../parser-sse
+      '@llmscope/provider-generic':
+        specifier: workspace:*
+        version: link:../provider-generic
+      '@llmscope/provider-registry':
+        specifier: workspace:*
+        version: link:../provider-registry
+      '@llmscope/redaction':
+        specifier: workspace:*
+        version: link:../redaction
       '@llmscope/shared-types':
         specifier: workspace:*
         version: link:../shared-types
@@ -93,6 +122,15 @@ importers:
       '@llmscope/storage-memory':
         specifier: workspace:*
         version: link:../storage-memory
+
+  packages/redaction:
+    dependencies:
+      '@llmscope/config':
+        specifier: workspace:*
+        version: link:../config
+      '@llmscope/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   packages/replay:
     dependencies:

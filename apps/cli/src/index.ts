@@ -17,6 +17,8 @@ import {
   NodeProxyEngine,
   StaticRouteResolver,
   anthropicMessagesPlugin,
+  genericOpenAiChatCompletionsPlugin,
+  genericOpenAiResponsesPlugin,
   openAiChatCompletionsPlugin,
   openAiResponsesPlugin,
 } from '@llmscope/proxy-engine';
@@ -1132,6 +1134,8 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
       openAiChatCompletionsPlugin,
       openAiResponsesPlugin,
       anthropicMessagesPlugin,
+      genericOpenAiChatCompletionsPlugin,
+      genericOpenAiResponsesPlugin,
     ],
   });
   const observationServer = config.ui.enabled

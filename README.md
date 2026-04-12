@@ -11,12 +11,13 @@ As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runt
 - observation API for health, config, summaries, detail, export, replay, delete, clear, and live WebSocket events
 - server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, diff, replay, live updates, empty, and error states
 - provider-aware normalization for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
+- generic OpenAI-compatible provider coverage for common relay path shapes
 - shared export, diff, and replay artifact generation in `packages/replay`
+- extracted runtime packages for provider registry, SSE parsing, and redaction
 - privacy modes and SQLite-backed persistence
 
 The complete product contract is broader than the current implementation. Still planned:
 
-- internal package extraction for registry, SSE parsing, and redaction
 - runtime hardening, release engineering, and OSS packaging
 
 MITM interception and local CA management are explicitly deferred to the final optional milestone. They are not part of the near-term product completion path.
@@ -38,7 +39,11 @@ The repository is a pnpm workspace monorepo with these active ownership points:
 - `apps/web`: observation UI server, API client modules, and HTML rendering
 - `packages/replay`: shared export serialization, session diffing, and replay snippet generation
 - `packages/config`: config loading, override merging, runtime validation
-- `packages/proxy-engine`: proxying, capture, normalization, privacy-adjacent runtime logic
+- `packages/proxy-engine`: proxying, capture, normalization orchestration, and session lifecycle handling
+- `packages/provider-registry`: confidence-based provider match orchestration
+- `packages/parser-sse`: reusable SSE event framing
+- `packages/redaction`: transport-independent privacy shaping
+- `packages/provider-generic`: generic OpenAI-compatible normalization
 - `packages/storage-memory` and `packages/storage-sqlite`: session persistence
 - `packages/shared-types` and `packages/core`: shared domain types and contracts
 
