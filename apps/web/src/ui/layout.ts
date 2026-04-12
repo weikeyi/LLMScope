@@ -1,16 +1,49 @@
 import type { ObservationPageData } from '../types.js';
-import { renderClientScript } from './actions.js';
 import { renderFilterBar } from './filters.js';
+import { renderClientScript } from './live-store.js';
 import { renderSelectedSession } from './session-detail.js';
 import { renderSessionList } from './session-list.js';
 import { escapeHtml } from './shared.js';
 
-export const renderObservationPage = (data: ObservationPageData): string => {
-  const state = JSON.stringify({
-    apiBaseUrl: data.apiBaseUrl,
-    filters: data.filters,
+export interface ObservationFragmentPayload {
+  errorHtml: string;
+  selectedSessionId: string | null;
+  sessionDetailHtml: string;
+  sessionListHtml: string;
+  state: {
+    apiBaseUrl: string;
+    filters: ObservationPageData['filters'];
+    selectedSessionId: string | null;
+  };
+}
+
+export const renderObservationFragments = (
+  data: ObservationPageData,
+): ObservationFragmentPayload => {
+  return {
+    errorHtml:
+      data.error === undefined
+        ? ''
+        : `<div class="page-error">${escapeHtml(data.error)}</div>`,
     selectedSessionId: data.selectedSessionId,
-  });
+    sessionListHtml: renderSessionList(
+      data.sessions,
+      data.filters,
+      data.selectedSessionId,
+      data.error,
+    ),
+    sessionDetailHtml: renderSelectedSession(data.selectedSession),
+    state: {
+      apiBaseUrl: data.apiBaseUrl,
+      filters: data.filters,
+      selectedSessionId: data.selectedSessionId,
+    },
+  };
+};
+
+export const renderObservationPage = (data: ObservationPageData): string => {
+  const fragments = renderObservationFragments(data);
+  const state = JSON.stringify(fragments.state);
 
   return `<!doctype html>
 <html lang="en">
@@ -398,21 +431,16 @@ export const renderObservationPage = (data: ObservationPageData): string => {
         <div class="page-meta">API base: ${escapeHtml(data.apiBaseUrl)}</div>
       </header>
       <div class="page-loading" role="status">Loading observation UI...</div>
-      ${data.error === undefined ? '' : `<div class="page-error">${escapeHtml(data.error)}</div>`}
+      <div data-page-error-root="true">${fragments.errorHtml}</div>
       <section class="layout">
         <aside class="sidebar">
           ${renderFilterBar(data.filters, data.sessions, data.selectedSessionId)}
           <section class="panel">
             <h2>Sessions</h2>
-            ${renderSessionList(
-              data.sessions,
-              data.filters,
-              data.selectedSessionId,
-              data.error,
-            )}
+            <div data-session-list-root="true">${fragments.sessionListHtml}</div>
           </section>
         </aside>
-        ${renderSelectedSession(data.selectedSession)}
+        <div data-session-detail-root="true">${fragments.sessionDetailHtml}</div>
       </section>
     </main>
     <script type="application/json" id="llmscope-observation-state">${escapeHtml(state)}</script>
@@ -420,4 +448,3 @@ export const renderObservationPage = (data: ObservationPageData): string => {
   </body>
 </html>`;
 };
-

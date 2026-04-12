@@ -355,4 +355,46 @@ describe('@llmscope/web observation ui', () => {
       await server.stop();
     }
   });
+
+  it('normalizes observation websocket URLs from the API base URL', async () => {
+    const { toRealtimeUrl } = await import('../src/ui/live-store.js');
+
+    expect(toRealtimeUrl('http://127.0.0.1:8788/')).toBe(
+      'ws://127.0.0.1:8788/ws',
+    );
+    expect(toRealtimeUrl('https://llmscope.local/')).toBe(
+      'wss://llmscope.local/ws',
+    );
+  });
+
+  it('serves live fragment payloads for the current operator view', async () => {
+    const apiBaseUrl = await createObservationApiServer();
+    const server = createObservationUiServer({
+      apiBaseUrl,
+      host: '127.0.0.1',
+      port: 0,
+    });
+
+    await server.start();
+
+    try {
+      const address = server.getAddress();
+      const response = await fetch(
+        `http://${address.host}:${address.port}/__llmscope/fragment?sessionId=session-1`,
+      );
+      const payload = (await response.json()) as {
+        selectedSessionId: string | null;
+        sessionListHtml: string;
+        sessionDetailHtml: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload.selectedSessionId).toBe('session-1');
+      expect(payload.sessionListHtml).toContain('session-row');
+      expect(payload.sessionDetailHtml).toContain('Normalized exchange');
+      expect(payload.sessionDetailHtml).toContain('Stream events');
+    } finally {
+      await server.stop();
+    }
+  });
 });

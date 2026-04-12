@@ -11,7 +11,10 @@ import type {
   ObservationUiServer,
   ObservationUiServerOptions,
 } from '../types.js';
-import { renderObservationPage } from '../ui/layout.js';
+import {
+  renderObservationFragments,
+  renderObservationPage,
+} from '../ui/layout.js';
 import { loadObservationPageData } from './api-client.js';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -195,6 +198,17 @@ export const createObservationUiServer = (
           return;
         }
 
+        if (
+          request.method === 'GET' &&
+          requestUrl.pathname === '/__llmscope/fragment'
+        ) {
+          const data = await loadObservationPageData(
+            toQueryOptions(requestUrl, options.apiBaseUrl),
+          );
+          sendJson(response, 200, renderObservationFragments(data));
+          return;
+        }
+
         if (request.method === 'GET' && requestUrl.pathname === '/health') {
           sendJson(response, 200, { ok: true });
           return;
@@ -247,4 +261,3 @@ export const createObservationUiServer = (
     },
   };
 };
-

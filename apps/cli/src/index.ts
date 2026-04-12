@@ -21,9 +21,12 @@ import {
   openAiResponsesPlugin,
 } from '@llmscope/proxy-engine';
 import type {
+  InspectorError,
   ListSessionsQuery,
   Session,
+  SessionSummary,
   SessionStatus,
+  WsEvent,
 } from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
 import { SqliteSessionStore } from '@llmscope/storage-sqlite';
@@ -816,6 +819,143 @@ const createSessionStore = (options: CliRuntimeOptions): SessionStore => {
   });
 };
 
+const toSessionSummary = (
+  session: Session,
+  overrides?: Partial<SessionSummary>,
+): SessionSummary => {
+  const summary: SessionSummary = {
+    id: session.id,
+    status: session.status,
+    startedAt: session.startedAt,
+    method: session.transport.method,
+    path: session.transport.path,
+    stream: session.normalized?.stream ?? session.streamEvents !== undefined,
+    warningCount: session.warnings?.length ?? 0,
+  };
+
+  if (session.endedAt !== undefined) {
+    summary.endedAt = session.endedAt;
+  }
+
+  if (session.normalized?.provider !== undefined) {
+    summary.provider = session.normalized.provider;
+  }
+
+  if (session.normalized?.model !== undefined) {
+    summary.model = session.normalized.model;
+  }
+
+  if (session.transport.statusCode !== undefined) {
+    summary.statusCode = session.transport.statusCode;
+  }
+
+  if (session.transport.durationMs !== undefined) {
+    summary.durationMs = session.transport.durationMs;
+  }
+
+  if (session.error?.code !== undefined) {
+    summary.errorCode = session.error.code;
+  }
+
+  return {
+    ...summary,
+    ...overrides,
+  };
+};
+
+const createLiveSessionStore = (
+  store: SessionStore,
+  publishEvent: (event: WsEvent) => void,
+): SessionStore => {
+  const streamingSessions = new Set<string>();
+
+  const publishStreamingSummary = async (sessionId: string): Promise<void> => {
+    if (streamingSessions.has(sessionId)) {
+      return;
+    }
+
+    const session = await store.getSession(sessionId);
+
+    if (session === null) {
+      return;
+    }
+
+    streamingSessions.add(sessionId);
+    publishEvent({
+      type: 'session:updated',
+      session: toSessionSummary(session, {
+        status: 'streaming',
+        stream: true,
+      }),
+    });
+  };
+
+  const publishTerminalEvent = (
+    sessionId: string,
+    status: SessionStatus,
+    error?: InspectorError,
+  ): void => {
+    streamingSessions.delete(sessionId);
+
+    if (status === 'completed') {
+      publishEvent({
+        type: 'session:completed',
+        sessionId,
+      });
+      return;
+    }
+
+    if (status === 'error' && error !== undefined) {
+      publishEvent({
+        type: 'session:error',
+        sessionId,
+        error,
+      });
+    }
+  };
+
+  return {
+    async saveSession(session: Session): Promise<void> {
+      await store.saveSession(session);
+      publishEvent({
+        type: 'session:created',
+        session: toSessionSummary(session),
+      });
+    },
+    async updateSession(session: Session): Promise<void> {
+      await store.updateSession(session);
+      publishEvent({
+        type: 'session:updated',
+        session: toSessionSummary(session),
+      });
+      publishTerminalEvent(session.id, session.status, session.error);
+    },
+    async appendStreamEvent(sessionId, event): Promise<void> {
+      await store.appendStreamEvent(sessionId, event);
+      await publishStreamingSummary(sessionId);
+      publishEvent({
+        type: 'session:stream-event',
+        sessionId,
+        event,
+      });
+    },
+    async listSessions(query) {
+      return store.listSessions(query);
+    },
+    async getSession(sessionId) {
+      return store.getSession(sessionId);
+    },
+    async deleteSession(sessionId) {
+      streamingSessions.delete(sessionId);
+      await store.deleteSession(sessionId);
+    },
+    async clearAll() {
+      streamingSessions.clear();
+      await store.clearAll();
+    },
+  };
+};
+
 const getNodeMajorVersion = (): number => {
   const major = Number(process.versions.node.split('.')[0] ?? '0');
   return Number.isInteger(major) ? major : 0;
@@ -973,7 +1113,13 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
     );
   }
 
-  const store = createSessionStore(options);
+  let publishLiveEvent = (_event: WsEvent): void => {};
+  const store = createLiveSessionStore(
+    createSessionStore(options),
+    (event: WsEvent) => {
+      publishLiveEvent(event);
+    },
+  );
   const privacy = options.privacy ?? config.privacy;
   const engine = new NodeProxyEngine({
     host: resolvedHost,
@@ -996,6 +1142,12 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
         corsOrigin: config.ui.corsOrigin,
       })
     : null;
+
+  if (observationServer !== null) {
+    publishLiveEvent = (event: WsEvent) => {
+      observationServer.broadcast(event);
+    };
+  }
 
   engine.onSession((session) => {
     console.log(formatSessionSummary(session));

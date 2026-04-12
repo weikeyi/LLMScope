@@ -8,14 +8,13 @@ As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runt
 
 - config-driven CLI startup with config file discovery
 - CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`, `export`
-- observation API for health, config, summaries, detail, export, delete, and clear operations
-- server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, empty, and error states
+- observation API for health, config, summaries, detail, export, delete, clear, and live WebSocket events
+- server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, live updates, empty, and error states
 - provider-aware normalization for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
 - privacy modes and SQLite-backed persistence
 
 The complete product contract is broader than the current implementation. Still planned:
 
-- live session updates
 - diff and replay workflows
 - internal package extraction for registry, SSE parsing, and redaction
 - runtime hardening, release engineering, and OSS packaging

@@ -30,6 +30,7 @@ AI Client / SDK / Relay User
 ```
 
 Today, `apps/cli` is the executable runtime host. It resolves config, starts the proxy, owns the observation API, and uses either memory or SQLite-backed session storage. `apps/web` is a separate server-rendered UI process that consumes the observation API.
+It now also consumes live WebSocket fanout and server-rendered fragment refreshes for in-page reconciliation.
 
 ## Current Ownership Boundaries
 
@@ -43,6 +44,7 @@ Today, `apps/cli` is the executable runtime host. It resolves config, starts the
   - command execution and shared command-side config resolution
 - `apps/cli/src/server/*`
   - observation HTTP server
+  - WebSocket fanout
   - route handling
   - export serialization
 - `apps/web/src/index.ts`
@@ -76,8 +78,8 @@ Today, `apps/cli` is the executable runtime host. It resolves config, starts the
 1. The CLI resolves runtime configuration from defaults, config files, environment variables, and command-line overrides.
 2. The CLI starts the proxy engine with a route target and a session store.
 3. The proxy engine captures requests, responses, and stream events, then normalizes them into shared session types.
-4. The observation API reads and mutates stored sessions for CLI commands and the Web UI.
-5. The Web server fetches observation data and renders the current UI surface.
+4. The observation API reads and mutates stored sessions for CLI commands, the Web UI, and WebSocket subscribers.
+5. The Web server fetches observation data, serves fragment refresh payloads, and renders the current UI surface.
 
 ## Planned Boundary Extractions
 
@@ -102,6 +104,11 @@ Milestone 2 split the CLI into:
 - `apps/cli/src/server/routes.ts`
 - `apps/cli/src/server/export.ts`
 
+Milestone 4 adds:
+
+- `apps/cli/src/server/ws.ts`
+- live event fanout sourced from session lifecycle and stream-event writes
+
 ### Web
 
 Milestone 3 split `apps/web/src/index.ts` into:
@@ -112,6 +119,11 @@ Milestone 3 split `apps/web/src/index.ts` into:
 - `apps/web/src/ui/session-detail.ts`
 - `apps/web/src/ui/filters.ts`
 - `apps/web/src/ui/actions.ts`
+
+Milestone 4 adds:
+
+- `apps/web/src/ui/live-store.ts`
+- server-rendered fragment refreshes for list/detail reconciliation during live updates
 
 ## Transport Strategy
 

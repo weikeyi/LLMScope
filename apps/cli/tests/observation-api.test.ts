@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { Session } from '@llmscope/shared-types';
+import type { Session, WsEvent } from '@llmscope/shared-types';
 
 import {
   createCliRuntime,
@@ -96,6 +96,25 @@ const listen = async (
       });
     },
   };
+};
+
+const waitFor = async (
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+
+  throw new Error('Timed out waiting for condition.');
 };
 
 describe('@llmscope/cli parseCliArgs', () => {
@@ -702,6 +721,100 @@ describe('@llmscope/cli observation api', () => {
         error: 'Method not allowed.',
       });
     } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('broadcasts live websocket events for created, streaming, and completed sessions', async () => {
+    const upstream = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'text/event-stream');
+        response.write('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n');
+        response.write('data: [DONE]\n\n');
+        response.end();
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    const messages: WsEvent[] = [];
+    const socket = new WebSocket(
+      `ws://${observationAddress.host}:${observationAddress.port}/ws`,
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve(), { once: true });
+      socket.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), {
+        once: true,
+      });
+    });
+
+    socket.addEventListener('message', (event) => {
+      messages.push(JSON.parse(String(event.data)) as WsEvent);
+    });
+
+    try {
+      const streamResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            stream: true,
+            messages: [{ role: 'user', content: 'hello live' }],
+          }),
+        },
+      );
+
+      expect(streamResponse.status).toBe(200);
+      await streamResponse.text();
+
+      await waitFor(() => {
+        return (
+          messages.some((event) => event.type === 'session:created') &&
+          messages.some((event) => event.type === 'session:updated') &&
+          messages.some((event) => event.type === 'session:stream-event') &&
+          messages.some((event) => event.type === 'session:completed')
+        );
+      });
+
+      expect(messages[0]?.type).toBe('session:created');
+      expect(messages.some((event) => {
+        return (
+          event.type === 'session:updated' &&
+          event.session.status === 'streaming'
+        );
+      })).toBe(true);
+      expect(messages.some((event) => {
+        return (
+          event.type === 'session:stream-event' &&
+          event.event.eventType === 'delta'
+        );
+      })).toBe(true);
+      expect(messages.some((event) => event.type === 'session:completed')).toBe(
+        true,
+      );
+    } finally {
+      socket.close();
       await runtime.stop();
       await upstreamAddress.close();
     }

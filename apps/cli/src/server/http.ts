@@ -1,18 +1,22 @@
 import {
   createServer,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from 'node:http';
 
 import type { SessionStore } from '@llmscope/core';
 import type { ResolvedConfig } from '@llmscope/config';
+import type { WsEvent } from '@llmscope/shared-types';
 
 import { handleObservationRequest } from './routes.js';
+import { createObservationWsHub } from './ws.js';
 
 export interface ObservationServer {
   start(): Promise<void>;
   stop(): Promise<void>;
   getAddress(): { host: string; port: number };
+  broadcast(event: WsEvent): void;
 }
 
 export const createObservationServer = (
@@ -28,7 +32,7 @@ export const createObservationServer = (
     host: options.host,
     port: options.port,
   };
-  const server = createServer(
+  const server: Server = createServer(
     (request: IncomingMessage, response: ServerResponse) => {
       void handleObservationRequest(request, response, {
         store,
@@ -53,6 +57,8 @@ export const createObservationServer = (
       });
     },
   );
+  const wsHub = createObservationWsHub();
+  wsHub.attach(server);
 
   let started = false;
 
@@ -95,6 +101,7 @@ export const createObservationServer = (
         return;
       }
 
+      wsHub.close();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error !== undefined && error !== null) {
@@ -109,6 +116,9 @@ export const createObservationServer = (
     },
     getAddress(): { host: string; port: number } {
       return { ...address };
+    },
+    broadcast(event: WsEvent): void {
+      wsHub.broadcast(event);
     },
   };
 };
