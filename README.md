@@ -56,10 +56,17 @@ The current product strategy is:
 
 ## Quick Start
 
-Build the CLI:
+Build workspace artifacts before running `dist/` commands:
 
 ```bash
-pnpm --filter @llmscope/cli build
+pnpm exec turbo run build --force
+```
+
+Quick smoke check for the built CLI:
+
+```bash
+node apps/cli/dist/index.js --help
+node apps/cli/dist/index.js doctor --config ./examples/llmscope.yaml
 ```
 
 Recommended config-driven path:
@@ -119,12 +126,12 @@ Supported export formats:
 Run the observation UI:
 
 ```bash
-pnpm --filter @llmscope/web build
 pnpm exec llmscope-web --api-base-url http://127.0.0.1:8788 --port 3000
 ```
 
 Then open `http://127.0.0.1:3000`.
 
+## Development
 ## Development
 
 From the repository root:

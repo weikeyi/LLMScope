@@ -606,11 +606,9 @@ const parseExportCommand = (args: string[]): ExportCommand => {
         break;
       case '--format': {
         const value = takeOptionValue(args, index, '--format');
-
         if (value !== 'json' && value !== 'ndjson' && value !== 'markdown') {
           throw new Error(`Invalid value for --format: ${value}.`);
         }
-
         format = value;
         index += 1;
         break;
@@ -678,7 +676,6 @@ const parseExportCommand = (args: string[]): ExportCommand => {
   if (sessionId !== undefined) {
     result.sessionId = sessionId;
   }
-
   if (host !== undefined) {
     result.target.host = host;
   }
