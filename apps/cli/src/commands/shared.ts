@@ -7,11 +7,25 @@ import {
   type LLMScopeConfig,
   type ResolvedConfig,
 } from '@llmscope/config';
+import { formatInspectorError } from '@llmscope/shared-types';
 
 export const readErrorBody = async (response: Response): Promise<string> => {
   const body = (await response.json().catch(() => null)) as {
     error?: string;
+    code?: string;
   } | null;
+
+  if (
+    typeof body?.error === 'string' &&
+    typeof body.code === 'string' &&
+    body.code.length > 0
+  ) {
+    return formatInspectorError({
+      code: body.code,
+      message: body.error,
+    });
+  }
+
   return (
     body?.error ??
     `Observation API request failed with status ${response.status}.`

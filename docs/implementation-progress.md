@@ -25,7 +25,7 @@ These commands are the current engineering baseline for milestone work.
 - LLMScope already has a runnable local inspector core: config loading, proxying, capture, normalization, privacy modes, and SQLite persistence are implemented.
 - The CLI now acts as the main operator surface for `start`, `doctor`, `list`, `show`, `clear`, and `export`.
 - The Web layer now covers the core operator workflow surface for inspect, filter, refresh, delete, clear, export, diff, replay, and live reconciliation.
-- The largest remaining gaps are runtime hardening and release engineering.
+- The largest remaining gap is release engineering and public OSS baseline work.
 
 ## Milestone Status
 
@@ -37,7 +37,7 @@ These commands are the current engineering baseline for milestone work.
 | 4. Add real-time product behavior | Completed in current branch | The observation API now exposes `/ws`, stream and session lifecycle events are fanned out live, and the Web UI reconciles list/detail state through fragment refreshes without page reload |
 | 5. Deliver export, diff, and replay workflows | Completed in current branch | `packages/replay` now owns shared export serialization, session diffing, and replay generation; the observation API exposes replay artifacts; the Web UI renders diff and replay views |
 | 6. Extract runtime concerns into dedicated packages | Completed in current branch | `packages/provider-registry`, `packages/parser-sse`, `packages/redaction`, and `packages/provider-generic` now own match orchestration, SSE parsing, privacy shaping, and generic OpenAI-compatible support; `packages/proxy-engine` orchestrates those packages instead of owning them directly |
-| 7. Runtime hardening, error taxonomy, and daily-use persistence | Partial foundation delivered | Config resolution, SQLite storage, privacy modes, and doctor checks exist; shared error taxonomy, timeout/backpressure controls, and stronger operability checks are still missing |
+| 7. Runtime hardening, error taxonomy, and daily-use persistence | Completed in current branch | Runtime now enforces timeout and concurrency limits, proxy/API/CLI/Web share typed error semantics, SQLite operability is inspected explicitly, and doctor reports daily-use persistence details |
 | 8. Release engineering and public OSS baseline | Not started | No Playwright, CI workflow, Changesets, or OSS policy docs yet |
 | 9. Optional MITM and local CA management | Deferred | Not started by design |
 
@@ -77,14 +77,13 @@ These commands are the current engineering baseline for milestone work.
 ## Highest-Priority Gaps
 
 1. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
-2. Runtime hardening work is still needed for timeout/backpressure controls, shared error taxonomy, and stronger SQLite operability checks.
-3. The roadmap's historical `pnpm test -- --runInBand` note is no longer a valid root command with the current Turbo/Vitest scripts; the verified repo-level commands are `pnpm test` and `pnpm typecheck`.
+2. The roadmap's historical `pnpm test -- --runInBand` note is no longer a valid root command with the current Turbo/Vitest scripts; the verified repo-level commands are `pnpm test` and `pnpm typecheck`.
 
 ## Next Execution Target
 
-After Milestone 6 exits green, the next delivery target is Milestone 7:
+After Milestone 7 exits green, the next delivery target is Milestone 8:
 
-- harden timeout, concurrency, and backpressure behavior
-- introduce a shared `InspectorError` taxonomy through runtime, API, CLI, and Web
-- improve SQLite daily-use operability and doctor checks
+- add CI and fresh-clone validation for install, build, test, and quick start
+- add public OSS/release hygiene such as Changesets and policy docs
+- align README and release-facing documentation with actual product behavior
 - keep `pnpm test` and `pnpm typecheck` green throughout

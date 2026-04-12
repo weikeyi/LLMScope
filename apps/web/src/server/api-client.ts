@@ -3,7 +3,11 @@ import {
   generateReplay,
   type ReplayFormat,
 } from '@llmscope/replay';
-import type { Session, SessionSummary } from '@llmscope/shared-types';
+import {
+  formatInspectorError,
+  type Session,
+  type SessionSummary,
+} from '@llmscope/shared-types';
 
 import type {
   ObservationFilters,
@@ -87,7 +91,20 @@ const toResponseErrorMessage = async (
 ): Promise<string> => {
   const body = (await response.json().catch(() => null)) as {
     error?: string;
+    code?: string;
   } | null;
+
+  if (
+    typeof body?.error === 'string' &&
+    typeof body.code === 'string' &&
+    body.code.length > 0
+  ) {
+    return formatInspectorError({
+      code: body.code,
+      message: body.error,
+    });
+  }
+
   return body?.error ?? fallback;
 };
 
@@ -105,7 +122,10 @@ const loadSessionDetail = async (
 
   if (!response.ok) {
     throw new Error(
-      `Observation API returned ${response.status} while loading session ${sessionId}.`,
+      await toResponseErrorMessage(
+        response,
+        `Observation API returned ${response.status} while loading session ${sessionId}.`,
+      ),
     );
   }
 

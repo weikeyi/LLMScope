@@ -7,9 +7,9 @@ import {
 
 import type { SessionStore } from '@llmscope/core';
 import type { ResolvedConfig } from '@llmscope/config';
-import type { WsEvent } from '@llmscope/shared-types';
+import type { InspectorError, WsEvent } from '@llmscope/shared-types';
 
-import { handleObservationRequest } from './routes.js';
+import { handleObservationRequest, sendInspectorError } from './routes.js';
 import { createObservationWsHub } from './ws.js';
 
 export interface ObservationServer {
@@ -18,6 +18,53 @@ export interface ObservationServer {
   getAddress(): { host: string; port: number };
   broadcast(event: WsEvent): void;
 }
+
+const toObservationInspectorError = (error: unknown): InspectorError => {
+  if (
+    error instanceof Error &&
+    error.message.startsWith('Session not found:')
+  ) {
+    return {
+      code: 'SESSION_NOT_FOUND',
+      phase: 'ui',
+      message: error.message,
+      statusCode: 404,
+    };
+  }
+
+  if (error instanceof SyntaxError) {
+    return {
+      code: 'BAD_REQUEST',
+      phase: 'ui',
+      message: 'Request body must be valid JSON.',
+      statusCode: 400,
+      details: { name: error.name, message: error.message },
+    };
+  }
+
+  if (error instanceof Error) {
+    const isBadRequest =
+      error.message.includes('must be') ||
+      error.message.startsWith('Invalid ') ||
+      error.message.startsWith('Missing ');
+
+    return {
+      code: isBadRequest ? 'BAD_REQUEST' : 'OBSERVATION_SERVER_ERROR',
+      phase: 'ui',
+      message: error.message,
+      statusCode: isBadRequest ? 400 : 500,
+      details: { name: error.name, message: error.message },
+    };
+  }
+
+  return {
+    code: 'OBSERVATION_SERVER_ERROR',
+    phase: 'ui',
+    message: 'Unknown observation server error.',
+    statusCode: 500,
+    details: error,
+  };
+};
 
 export const createObservationServer = (
   store: SessionStore,
@@ -41,19 +88,12 @@ export const createObservationServer = (
         port: address.port,
         corsOrigin: options.corsOrigin,
       }).catch((error: unknown) => {
-        const message =
-          error instanceof Error
-            ? error.message
-            : 'Unknown observation server error.';
-
         if (response.headersSent) {
           response.end();
           return;
         }
 
-        response.statusCode = message.startsWith('Session not found:') ? 404 : 500;
-        response.setHeader('content-type', 'application/json; charset=utf-8');
-        response.end(JSON.stringify({ error: message }));
+        sendInspectorError(response, toObservationInspectorError(error));
       });
     },
   );

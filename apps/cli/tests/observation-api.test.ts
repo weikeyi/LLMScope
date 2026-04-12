@@ -337,6 +337,8 @@ describe('@llmscope/cli doctor', () => {
         host: '127.0.0.1',
         port: 0,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -496,6 +498,57 @@ describe('@llmscope/cli observation api', () => {
         messages: [{ role: 'user', content: 'hi' }],
       });
       expect(detail.response?.bodyJson).toMatchObject({ ok: true });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('allows loopback CORS origins and rejects non-loopback origins by default', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const loopbackResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        {
+          headers: {
+            origin: 'http://127.0.0.1:3000',
+          },
+        },
+      );
+      const remoteResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        {
+          headers: {
+            origin: 'https://evil.example.com',
+          },
+        },
+      );
+
+      expect(loopbackResponse.headers.get('access-control-allow-origin')).toBe(
+        'http://127.0.0.1:3000',
+      );
+      expect(remoteResponse.headers.get('access-control-allow-origin')).toBeNull();
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -703,14 +756,25 @@ describe('@llmscope/cli observation api', () => {
         status: 'completed',
       });
       expect(missingResponse.status).toBe(404);
-      expect(await missingResponse.json()).toEqual({ error: 'Not found.' });
+      expect(await missingResponse.json()).toEqual({
+        error: 'Not found.',
+        code: 'NOT_FOUND',
+        phase: 'ui',
+        statusCode: 404,
+      });
       expect(invalidLimitResponse.status).toBe(400);
       expect(await invalidLimitResponse.json()).toEqual({
         error: 'Invalid limit query value: abc.',
+        code: 'BAD_REQUEST',
+        phase: 'ui',
+        statusCode: 400,
       });
       expect(invalidStatusResponse.status).toBe(400);
       expect(await invalidStatusResponse.json()).toEqual({
         error: 'Invalid status query value: wat.',
+        code: 'BAD_REQUEST',
+        phase: 'ui',
+        statusCode: 400,
       });
       expect(optionsResponse.status).toBe(204);
       expect(optionsResponse.headers.get('access-control-allow-methods')).toBe(
@@ -719,6 +783,9 @@ describe('@llmscope/cli observation api', () => {
       expect(methodNotAllowedResponse.status).toBe(405);
       expect(await methodNotAllowedResponse.json()).toEqual({
         error: 'Method not allowed.',
+        code: 'METHOD_NOT_ALLOWED',
+        phase: 'ui',
+        statusCode: 405,
       });
     } finally {
       await runtime.stop();

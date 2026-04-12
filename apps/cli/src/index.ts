@@ -32,7 +32,10 @@ import type {
   WsEvent,
 } from '@llmscope/shared-types';
 import { MemorySessionStore } from '@llmscope/storage-memory';
-import { SqliteSessionStore } from '@llmscope/storage-sqlite';
+import {
+  SqliteSessionStore,
+  inspectSqliteStorage,
+} from '@llmscope/storage-sqlite';
 
 import { runClearCommand } from './commands/clear.js';
 import { runDoctorCommand } from './commands/doctor.js';
@@ -1038,15 +1041,14 @@ const checkSqliteWritable = (config: ResolvedConfig): DoctorCheckResult => {
   }
 
   try {
-    const store = new SqliteSessionStore({
+    const inspection = inspectSqliteStorage({
       filePath: config.storage.sqlite.filePath,
-      maxSessions: 1,
     });
-    store.close();
+
     return {
       label: 'sqlite writable',
       ok: true,
-      detail: config.storage.sqlite.filePath,
+      detail: `${inspection.filePath} (journal=${inspection.journalMode.toLowerCase()}, schema=v${inspection.schemaVersion}, busyTimeout=${inspection.busyTimeoutMs}ms)`,
     };
   } catch (error) {
     return {
@@ -1127,6 +1129,8 @@ export const createCliRuntime = (options: CliRuntimeOptions): CliRuntime => {
     host: resolvedHost,
     port: resolvedPort,
     mode: config.proxy.mode,
+    maxConcurrentSessions: config.proxy.maxConcurrentSessions,
+    requestTimeoutMs: config.proxy.requestTimeoutMs,
     routeResolver: new StaticRouteResolver(toResolvedRoute(route)),
     store,
     privacy,

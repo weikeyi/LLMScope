@@ -9,7 +9,12 @@ import {
   type ExportFormat,
   type ExportRequest,
 } from '@llmscope/replay';
-import type { ListSessionsQuery, SessionStatus } from '@llmscope/shared-types';
+import type {
+  InspectorError,
+  InspectorErrorBody,
+  ListSessionsQuery,
+  SessionStatus,
+} from '@llmscope/shared-types';
 
 import { loadExportSessions } from './export.js';
 import {
@@ -28,21 +33,111 @@ const sendJson = (
   response.end(JSON.stringify(body));
 };
 
+const appendVaryHeader = (
+  response: ServerResponse,
+  headerName: string,
+): void => {
+  const existing = response.getHeader('vary');
+
+  if (typeof existing !== 'string' || existing.length === 0) {
+    response.setHeader('vary', headerName);
+    return;
+  }
+
+  const values = existing
+    .split(',')
+    .map((value) => value.trim().toLowerCase());
+
+  if (!values.includes(headerName.toLowerCase())) {
+    response.setHeader('vary', `${existing}, ${headerName}`);
+  }
+};
+
+const isLoopbackHostname = (hostname: string): boolean => {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '[::1]' ||
+    hostname.startsWith('127.')
+  );
+};
+
+const resolveAllowedOrigin = (
+  request: IncomingMessage,
+  corsOrigin: string,
+): string | null => {
+  const requestOrigin = request.headers.origin;
+
+  if (typeof requestOrigin !== 'string' || requestOrigin.length === 0) {
+    return null;
+  }
+
+  if (requestOrigin === corsOrigin) {
+    return requestOrigin;
+  }
+
+  try {
+    const parsedOrigin = new URL(requestOrigin);
+    return isLoopbackHostname(parsedOrigin.hostname) ? requestOrigin : null;
+  } catch {
+    return null;
+  }
+};
+
+const toInspectorErrorBody = (error: InspectorError): InspectorErrorBody => {
+  const body: InspectorErrorBody = {
+    error: error.message,
+    code: error.code,
+    phase: error.phase,
+  };
+
+  if (error.statusCode !== undefined) {
+    body.statusCode = error.statusCode;
+  }
+
+  if (error.retryable !== undefined) {
+    body.retryable = error.retryable;
+  }
+
+  if (error.details !== undefined) {
+    body.details = error.details;
+  }
+
+  return body;
+};
+
+export const sendInspectorError = (
+  response: ServerResponse,
+  error: InspectorError,
+): void => {
+  sendJson(response, error.statusCode ?? 500, toInspectorErrorBody(error));
+};
+
 const sendNotFound = (response: ServerResponse): void => {
-  sendJson(response, 404, {
-    error: 'Not found.',
+  sendInspectorError(response, {
+    code: 'NOT_FOUND',
+    phase: 'ui',
+    message: 'Not found.',
+    statusCode: 404,
   });
 };
 
 const sendMethodNotAllowed = (response: ServerResponse): void => {
-  sendJson(response, 405, {
-    error: 'Method not allowed.',
+  sendInspectorError(response, {
+    code: 'METHOD_NOT_ALLOWED',
+    phase: 'ui',
+    message: 'Method not allowed.',
+    statusCode: 405,
   });
 };
 
 const sendBadRequest = (response: ServerResponse, message: string): void => {
-  sendJson(response, 400, {
-    error: message,
+  sendInspectorError(response, {
+    code: 'BAD_REQUEST',
+    phase: 'ui',
+    message,
+    statusCode: 400,
   });
 };
 
@@ -206,7 +301,13 @@ export const handleObservationRequest = async (
     corsOrigin: string;
   },
 ): Promise<void> => {
-  response.setHeader('access-control-allow-origin', options.corsOrigin);
+  appendVaryHeader(response, 'Origin');
+  const allowedOrigin = resolveAllowedOrigin(request, options.corsOrigin);
+
+  if (allowedOrigin !== null) {
+    response.setHeader('access-control-allow-origin', allowedOrigin);
+  }
+
   response.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS');
   response.setHeader('access-control-allow-headers', 'content-type');
 

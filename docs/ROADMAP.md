@@ -15,14 +15,14 @@ This roadmap translates the product contract into mergeable milestone gates. Eac
 
 | Milestone | Status | Outcome |
 | --- | --- | --- |
-| 1. Lock the product contract | In progress | Freeze what "complete product" means and align the docs |
-| 2. Complete the CLI product surface | Planned next | Finish the CLI as a full operator surface |
-| 3. Upgrade the Web UI into an interactive app | Planned | Turn read-only observation into operator workflows |
-| 4. Add real-time product behavior | Planned | Make the UI update live while the proxy runs |
-| 5. Deliver export, diff, and replay workflows | Planned | Turn captured sessions into reusable artifacts |
-| 6. Extract runtime concerns into dedicated packages | Planned | Align internal boundaries with the architecture |
-| 7. Runtime hardening, error taxonomy, and daily-use persistence | Planned | Make the product reliable for normal local use |
-| 8. Release engineering and public OSS baseline | Planned | Make the repository shippable and maintainable in public |
+| 1. Lock the product contract | Completed | Canonical docs, architecture, and milestone gates are aligned |
+| 2. Complete the CLI product surface | Completed | CLI/operator workflows and observation API management endpoints are implemented |
+| 3. Upgrade the Web UI into an interactive app | Completed | The observation UI supports filtering, selection, refresh, destructive actions, and export |
+| 4. Add real-time product behavior | Completed | Live session and stream updates reconcile through the web observation surface |
+| 5. Deliver export, diff, and replay workflows | Completed | Shared replay/export/diff primitives back both CLI and Web workflows |
+| 6. Extract runtime concerns into dedicated packages | Completed | Runtime responsibilities are split into focused workspace packages |
+| 7. Runtime hardening, error taxonomy, and daily-use persistence | Completed | Typed errors, runtime limits, SQLite operability inspection, and safer UI API behavior are in place |
+| 8. Release engineering and public OSS baseline | Planned next | Make the repository shippable and maintainable in public |
 | 9. Optional final milestone: MITM and local CA management | Deferred final optional | Add opt-in HTTPS interception without contaminating the base product |
 
 ## Milestone Gates

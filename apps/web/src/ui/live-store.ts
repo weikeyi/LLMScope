@@ -25,6 +25,18 @@ export const renderClientScript = (): string => {
     document.body.setAttribute('data-loading', value ? 'true' : 'false');
   };
 
+  const toResponseErrorMessage = async (response, fallback) => {
+    const body = await response.json().catch(() => null);
+
+    if (body && typeof body.error === 'string') {
+      return typeof body.code === 'string' && body.code.length > 0
+        ? '[' + body.code + '] ' + body.error
+        : body.error;
+    }
+
+    return fallback;
+  };
+
   const refreshFragments = async () => {
     const response = await fetch('/__llmscope/fragment' + window.location.search, {
       headers: {
@@ -146,7 +158,9 @@ export const renderClientScript = (): string => {
           });
 
           if (!response.ok) {
-            throw new Error('Export failed.');
+            throw new Error(
+              await toResponseErrorMessage(response, 'Export failed.'),
+            );
           }
 
           const blob = await response.blob();
@@ -187,7 +201,9 @@ export const renderClientScript = (): string => {
 
         if (!response.ok) {
           setLoading(false);
-          throw new Error('Delete failed.');
+          throw new Error(
+            await toResponseErrorMessage(response, 'Delete failed.'),
+          );
         }
 
         const url = new URL(window.location.href);
@@ -212,7 +228,9 @@ export const renderClientScript = (): string => {
 
         if (!response.ok) {
           setLoading(false);
-          throw new Error('Clear failed.');
+          throw new Error(
+            await toResponseErrorMessage(response, 'Clear failed.'),
+          );
         }
 
         const pageUrl = new URL(window.location.href);

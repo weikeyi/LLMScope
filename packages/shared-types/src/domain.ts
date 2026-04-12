@@ -136,12 +136,53 @@ export interface CanonicalExchange {
   warnings?: string[];
 }
 
+export type InspectorErrorPhase =
+  | 'request'
+  | 'routing'
+  | 'upstream'
+  | 'stream'
+  | 'storage'
+  | 'ui';
+
+export type InspectorErrorCode =
+  | 'NOT_FOUND'
+  | 'BAD_REQUEST'
+  | 'METHOD_NOT_ALLOWED'
+  | 'SESSION_NOT_FOUND'
+  | 'TOO_MANY_CONCURRENT_SESSIONS'
+  | 'UPSTREAM_TIMEOUT'
+  | 'UPSTREAM_RATE_LIMITED'
+  | 'UPSTREAM_SERVER_ERROR'
+  | 'UPSTREAM_REQUEST_FAILED'
+  | 'OBSERVATION_SERVER_ERROR'
+  | 'STORAGE_OPEN_FAILED'
+  | 'STORAGE_SCHEMA_UNSUPPORTED'
+  | (string & {});
+
 export interface InspectorError {
-  code: string;
-  phase: 'request' | 'routing' | 'upstream' | 'stream' | 'storage' | 'ui';
+  code: InspectorErrorCode;
+  phase: InspectorErrorPhase;
   message: string;
+  statusCode?: number;
+  retryable?: boolean;
   details?: unknown;
 }
+
+export interface InspectorErrorBody {
+  error: string;
+  code?: InspectorErrorCode;
+  phase?: InspectorErrorPhase;
+  statusCode?: number;
+  retryable?: boolean;
+  details?: unknown;
+}
+
+export const formatInspectorError = (error: {
+  code: InspectorErrorCode;
+  message: string;
+}): string => {
+  return `[${error.code}] ${error.message}`;
+};
 
 export interface CanonicalStreamEvent {
   id: string;

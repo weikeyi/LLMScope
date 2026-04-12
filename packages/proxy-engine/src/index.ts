@@ -35,6 +35,7 @@ import {
 import type {
   CanonicalExchange,
   CanonicalStreamEvent,
+  InspectorErrorBody,
   InspectorError,
   RawHttpMessage,
   Session,
@@ -105,6 +106,10 @@ const toHeaderRecord = (
   }
 
   return normalized;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object';
 };
 
 const toIncomingRequestMeta = (
@@ -380,6 +385,96 @@ const writeHeaders = (
   }
 };
 
+const toInspectorErrorBody = (error: InspectorError): InspectorErrorBody => {
+  const body: InspectorErrorBody = {
+    error: error.message,
+    code: error.code,
+    phase: error.phase,
+  };
+
+  if (error.statusCode !== undefined) {
+    body.statusCode = error.statusCode;
+  }
+
+  if (error.retryable !== undefined) {
+    body.retryable = error.retryable;
+  }
+
+  if (error.details !== undefined) {
+    body.details = error.details;
+  }
+
+  return body;
+};
+
+const writeInspectorError = (
+  response: ServerResponse,
+  error: InspectorError,
+): void => {
+  response.statusCode = error.statusCode ?? 500;
+  response.setHeader('content-type', 'application/json; charset=utf-8');
+  response.end(JSON.stringify(toInspectorErrorBody(error)));
+};
+
+const extractUpstreamErrorMessage = (
+  responseBody: RawHttpMessage | undefined,
+  statusCode: number,
+): string => {
+  const bodyJson = responseBody?.bodyJson;
+
+  if (isRecord(bodyJson)) {
+    const errorValue = bodyJson.error;
+
+    if (typeof errorValue === 'string' && errorValue.length > 0) {
+      return errorValue;
+    }
+
+    if (isRecord(errorValue) && typeof errorValue.message === 'string') {
+      return errorValue.message;
+    }
+
+    if (typeof bodyJson.message === 'string' && bodyJson.message.length > 0) {
+      return bodyJson.message;
+    }
+  }
+
+  if (
+    typeof responseBody?.bodyText === 'string' &&
+    responseBody.bodyText.trim().length > 0
+  ) {
+    return responseBody.bodyText.trim();
+  }
+
+  return `Upstream request failed with status ${statusCode}.`;
+};
+
+const classifyUpstreamResponseError = (
+  statusCode: number,
+  responseBody: RawHttpMessage | undefined,
+): InspectorError | undefined => {
+  if (statusCode === 429) {
+    return {
+      code: 'UPSTREAM_RATE_LIMITED',
+      phase: 'upstream',
+      message: extractUpstreamErrorMessage(responseBody, statusCode),
+      statusCode,
+      retryable: true,
+    };
+  }
+
+  if (statusCode >= 500) {
+    return {
+      code: 'UPSTREAM_SERVER_ERROR',
+      phase: 'upstream',
+      message: extractUpstreamErrorMessage(responseBody, statusCode),
+      statusCode,
+      retryable: true,
+    };
+  }
+
+  return undefined;
+};
+
 const omitHeaders = (
   headers: Record<string, string | string[]>,
   keys: string[] = [],
@@ -531,8 +626,13 @@ export class NodeProxyEngine implements ProxyEngine {
     response: ServerResponse,
   ): Promise<void> {
     if (this.activeSessions >= this.maxConcurrentSessions) {
-      response.statusCode = 429;
-      response.end('Too many concurrent sessions');
+      writeInspectorError(response, {
+        code: 'TOO_MANY_CONCURRENT_SESSIONS',
+        phase: 'request',
+        message: 'Too many concurrent sessions.',
+        statusCode: 429,
+        retryable: true,
+      });
       return;
     }
 
@@ -542,6 +642,7 @@ export class NodeProxyEngine implements ProxyEngine {
     const requestMeta = toIncomingRequestMeta(request);
     const sessionId = randomUUID();
     let requestBodyBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
 
     const session: Session = {
       id: sessionId,
@@ -649,7 +750,7 @@ export class NodeProxyEngine implements ProxyEngine {
       }
 
       const abortController = new AbortController();
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         abortController.abort();
       }, this.requestTimeoutMs);
 
@@ -658,7 +759,6 @@ export class NodeProxyEngine implements ProxyEngine {
         requestBodyBuffer.byteLength === 0 || request.method === 'GET'
           ? null
           : requestBodyBuffer;
-
       const upstreamResponse = await fetch(upstreamUrlString, {
         method: upstreamMethod,
         headers: upstreamHeaders,
@@ -666,8 +766,6 @@ export class NodeProxyEngine implements ProxyEngine {
         body: upstreamRequestBody,
         duplex: 'half',
       });
-
-      clearTimeout(timeout);
 
       const responseHeaders = Object.fromEntries(
         Array.from(upstreamResponse.headers.entries()).map(([key, value]) => [
@@ -778,7 +876,6 @@ export class NodeProxyEngine implements ProxyEngine {
         session,
         mergeWarnings(session.warnings, redactedResponse.warnings),
       );
-      session.status = 'completed';
       session.endedAt = endedAt.toISOString();
       session.transport.durationMs = endedAt.getTime() - startedAt.getTime();
 
@@ -794,6 +891,19 @@ export class NodeProxyEngine implements ProxyEngine {
         );
       }
 
+      if (session.error === undefined) {
+        const upstreamError = classifyUpstreamResponseError(
+          upstreamResponse.status,
+          session.response,
+        );
+
+        if (upstreamError !== undefined) {
+          session.error = upstreamError;
+        }
+      }
+
+      session.status = session.error === undefined ? 'completed' : 'error';
+
       await this.store.updateSession(session);
       this.emitSession(session);
     } catch (error) {
@@ -807,19 +917,14 @@ export class NodeProxyEngine implements ProxyEngine {
       this.emitSession(session);
 
       if (response.headersSent === false) {
-        response.statusCode =
-          inspectorError.code === 'TOO_MANY_CONCURRENT_SESSIONS' ? 429 : 502;
-        response.setHeader('content-type', 'application/json');
-        response.end(
-          JSON.stringify({
-            error: inspectorError.message,
-            code: inspectorError.code,
-          }),
-        );
+        writeInspectorError(response, inspectorError);
       } else {
         response.end();
       }
     } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
       this.activeSessions -= 1;
     }
   }
@@ -830,6 +935,8 @@ export class NodeProxyEngine implements ProxyEngine {
         code: 'UPSTREAM_TIMEOUT',
         phase: 'upstream',
         message: 'Upstream request timed out.',
+        statusCode: 504,
+        retryable: true,
         details: { name: error.name, message: error.message },
       };
     }
@@ -839,6 +946,8 @@ export class NodeProxyEngine implements ProxyEngine {
         code: 'UPSTREAM_REQUEST_FAILED',
         phase: 'upstream',
         message: error.message,
+        statusCode: 502,
+        retryable: true,
         details: {
           name: error.name,
           message: error.message,
@@ -851,6 +960,8 @@ export class NodeProxyEngine implements ProxyEngine {
       code: 'UPSTREAM_REQUEST_FAILED',
       phase: 'upstream',
       message: 'Unknown upstream proxy failure.',
+      statusCode: 502,
+      retryable: true,
       details: error,
     };
   }

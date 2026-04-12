@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import Database from 'better-sqlite3';
 
 import type { SessionStore } from '@llmscope/core';
@@ -13,11 +13,96 @@ import type {
 export interface SqliteSessionStoreOptions {
   filePath: string;
   maxSessions?: number;
+  cwd?: string;
 }
 
 const DEFAULT_MAX_SESSIONS = 500;
+export const SQLITE_SCHEMA_VERSION = 1;
+export const SQLITE_BUSY_TIMEOUT_MS = 5000;
 
 const clone = <T>(value: T): T => structuredClone(value);
+
+export interface SqliteStorageInspection {
+  filePath: string;
+  directoryPath: string;
+  journalMode: string;
+  busyTimeoutMs: number;
+  schemaVersion: number;
+}
+
+export const resolveSqliteFilePath = (
+  filePath: string,
+  cwd = process.cwd(),
+): string => {
+  return isAbsolute(filePath) ? filePath : resolvePath(cwd, filePath);
+};
+
+const prepareSqliteDatabase = (
+  database: Database.Database,
+  filePath: string,
+): SqliteStorageInspection => {
+  try {
+    const journalMode = String(
+      database.pragma('journal_mode = wal', { simple: true }) ?? 'unknown',
+    );
+    database.pragma(`busy_timeout = ${SQLITE_BUSY_TIMEOUT_MS}`);
+    const busyTimeoutMs = Number(
+      database.pragma('busy_timeout', { simple: true }) ?? 0,
+    );
+    let schemaVersion = Number(
+      database.pragma('user_version', { simple: true }) ?? 0,
+    );
+
+    if (schemaVersion === 0) {
+      database.pragma(`user_version = ${SQLITE_SCHEMA_VERSION}`);
+      schemaVersion = SQLITE_SCHEMA_VERSION;
+    } else if (schemaVersion !== SQLITE_SCHEMA_VERSION) {
+      throw new Error(
+        `Unsupported sqlite schema version ${schemaVersion}; expected ${SQLITE_SCHEMA_VERSION}.`,
+      );
+    }
+
+    return {
+      filePath,
+      directoryPath: dirname(filePath),
+      journalMode,
+      busyTimeoutMs,
+      schemaVersion,
+    };
+  } catch (error) {
+    throw new Error(
+      `Failed to prepare sqlite storage at ${filePath}: ${error instanceof Error ? error.message : 'Unknown sqlite error.'}`,
+    );
+  }
+};
+
+export const inspectSqliteStorage = (options: {
+  filePath: string;
+  cwd?: string;
+}): SqliteStorageInspection => {
+  const filePath = resolveSqliteFilePath(options.filePath, options.cwd);
+  const directoryPath = dirname(filePath);
+
+  try {
+    mkdirSync(directoryPath, { recursive: true });
+  } catch (error) {
+    throw new Error(
+      `Invalid sqlite storage path ${filePath}: ${error instanceof Error ? error.message : 'Unknown path error.'}`,
+    );
+  }
+
+  const database = new Database(filePath);
+
+  try {
+    return prepareSqliteDatabase(database, filePath);
+  } catch (error) {
+    throw new Error(
+      `Failed to inspect sqlite storage path ${filePath}: ${error instanceof Error ? error.message : 'Unknown sqlite error.'}`,
+    );
+  } finally {
+    database.close();
+  }
+};
 
 export const toSessionSummary = (session: Session): SessionSummary => {
   const summary: SessionSummary = {
@@ -65,9 +150,16 @@ export class SqliteSessionStore implements SessionStore {
 
   private readonly maxSessions: number;
 
+  private lastAccessedAt = 0;
+
   public constructor(options: SqliteSessionStoreOptions) {
-    mkdirSync(dirname(options.filePath), { recursive: true });
-    this.database = new Database(options.filePath);
+    const filePath = resolveSqliteFilePath(options.filePath, options.cwd);
+    const inspection = inspectSqliteStorage({
+      filePath,
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    });
+    this.database = new Database(inspection.filePath);
+    prepareSqliteDatabase(this.database, inspection.filePath);
     this.maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
     this.database.exec(
       [
@@ -79,6 +171,7 @@ export class SqliteSessionStore implements SessionStore {
         ')',
       ].join(' '),
     );
+    this.lastAccessedAt = this.readLatestAccessedAt();
   }
 
   public async saveSession(session: Session): Promise<void> {
@@ -185,14 +278,19 @@ export class SqliteSessionStore implements SessionStore {
           '  last_accessed_at = excluded.last_accessed_at',
         ].join(' '),
       )
-      .run(sessionId, JSON.stringify(stored), stored.startedAt, Date.now());
+      .run(
+        sessionId,
+        JSON.stringify(stored),
+        stored.startedAt,
+        this.nextAccessedAt(),
+      );
     this.evictIfNeeded();
   }
 
   private touch(sessionId: string): void {
     this.database
       .prepare('UPDATE sessions SET last_accessed_at = ? WHERE session_id = ?')
-      .run(Date.now(), sessionId);
+      .run(this.nextAccessedAt(), sessionId);
   }
 
   private evictIfNeeded(): void {
@@ -238,5 +336,19 @@ export class SqliteSessionStore implements SessionStore {
       .all() as Array<{ session_json: string }>;
 
     return rows.map((row) => JSON.parse(row.session_json) as Session);
+  }
+
+  private nextAccessedAt(): number {
+    const now = Date.now();
+    this.lastAccessedAt = Math.max(this.lastAccessedAt + 1, now);
+    return this.lastAccessedAt;
+  }
+
+  private readLatestAccessedAt(): number {
+    const row = this.database
+      .prepare('SELECT MAX(last_accessed_at) AS last_accessed_at FROM sessions')
+      .get() as { last_accessed_at: number | null } | undefined;
+
+    return row?.last_accessed_at ?? 0;
   }
 }
