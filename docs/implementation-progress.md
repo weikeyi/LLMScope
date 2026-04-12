@@ -6,11 +6,13 @@ This document is the repository truth source for current implementation status. 
 
 ## Verification Snapshot
 
-Verified locally on 2026-04-12 in the Milestone 2 worktree:
+Verified locally on 2026-04-12:
 
 - `pnpm --filter @llmscope/cli test`: passing
 - `pnpm --filter @llmscope/cli typecheck`: passing
 - built CLI smoke coverage for `start`, `doctor`, `list`, `show`, `clear`, and `export`: passing
+- `pnpm --filter @llmscope/web test`: passing
+- `pnpm --filter @llmscope/web typecheck`: passing
 
 These commands are the current engineering baseline for milestone work.
 
@@ -18,8 +20,8 @@ These commands are the current engineering baseline for milestone work.
 
 - LLMScope already has a runnable local inspector core: config loading, proxying, capture, normalization, privacy modes, and SQLite persistence are implemented.
 - The CLI now acts as the main operator surface for `start`, `doctor`, `list`, `show`, `clear`, and `export`.
-- The Web layer is usable for read-only observation, but it is not yet a full operator workflow surface.
-- The largest remaining gaps are interactive Web workflows, real-time UI behavior, diff/replay product workflows, internal package extraction, runtime hardening, and release engineering.
+- The Web layer now covers the core operator workflow surface for inspect, filter, refresh, delete, clear, and export.
+- The largest remaining gaps are real-time UI behavior, diff/replay product workflows, internal package extraction, runtime hardening, and release engineering.
 
 ## Milestone Status
 
@@ -27,7 +29,7 @@ These commands are the current engineering baseline for milestone work.
 | --- | --- | --- |
 | 1. Lock the product contract | Completed | Canonical contract, roadmap, and architecture docs are aligned |
 | 2. Complete the CLI product surface | Completed in current branch | `export` is implemented, `/api/config` and `/api/sessions/export` exist, doctor checks the daily-use SQLite path, and CLI/server ownership is split into dedicated modules |
-| 3. Upgrade the Web UI into an interactive app | Partial foundation delivered | List, filters, detail view, empty state, and error state exist; refresh/delete/clear/export actions are still missing |
+| 3. Upgrade the Web UI into an interactive app | Completed in current branch | The UI supports URL-backed filters and selection, refresh, delete, clear, export, and stronger empty/error/loading states, with server and UI code split into dedicated modules |
 | 4. Add real-time product behavior | Not started | No live push transport or in-progress UI reconciliation yet |
 | 5. Deliver export, diff, and replay workflows | Not started | No shared replay/export package or diff UI yet |
 | 6. Extract runtime concerns into dedicated packages | Not started | SSE parsing, redaction, and provider registry still live inside current packages |
@@ -58,21 +60,23 @@ These commands are the current engineering baseline for milestone work.
 
 ### Web observation surface
 
-- `apps/web`: server-rendered observation UI
-- Current UI surface: session list, provider/model/status/search filters, URL-backed selection, raw request/response display, normalized exchange display, stream event timeline, empty state, and error state
+- `apps/web`: server-rendered observation UI with modular server and UI ownership
+- `apps/web/src/server/*`: request parsing, API calls, and server startup
+- `apps/web/src/ui/*`: layout, filters, action controls, session list, and detail rendering
+- Current UI surface: session list, provider/model/status/search filters, URL-backed selection, refresh, single-session delete, clear-all, export, raw request/response display, normalized exchange display, stream event timeline, empty state, and error state
 
 ## Highest-Priority Gaps
 
-1. The Web UI still cannot perform the core operator actions that the CLI now covers.
-2. Diff and replay remain product-level gaps even though export is now present.
+1. Diff and replay remain product-level gaps even though export is now present in both CLI and Web surfaces.
+2. Real-time updates are still missing, so operators must refresh to pick up new sessions.
 3. Runtime concerns are still concentrated in large core packages. Extraction should happen only after the next operator workflows are stable.
 4. Release engineering is still absent, which blocks the project from being comfortably consumable as a public OSS tool.
 
 ## Next Execution Target
 
-After Milestone 2 exits green, the next delivery target is Milestone 3:
+After Milestone 3 exits green, the next delivery target is Milestone 4:
 
-- split the Web surface out of `apps/web/src/index.ts`
-- add refresh, delete, clear, and export actions to the UI
-- make selected-session state stable through the URL
-- keep `pnpm --filter @llmscope/web test` and `pnpm --filter @llmscope/web typecheck` green throughout
+- add WebSocket-backed live session fanout from the observation service
+- reconcile in-progress and completed sessions in the UI without page reload
+- preserve the current URL-addressable selection and filter behavior
+- keep `pnpm test -- --runInBand` green and add a live manual smoke

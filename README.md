@@ -9,13 +9,12 @@ As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runt
 - config-driven CLI startup with config file discovery
 - CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`, `export`
 - observation API for health, config, summaries, detail, export, delete, and clear operations
-- server-rendered read-only observation UI with list, filters, detail, empty, and error states
+- server-rendered interactive observation UI with list, filters, refresh, delete, clear, export, empty, and error states
 - provider-aware normalization for OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages
 - privacy modes and SQLite-backed persistence
 
 The complete product contract is broader than the current implementation. Still planned:
 
-- interactive Web actions and URL-stable operator flows
 - live session updates
 - diff and replay workflows
 - internal package extraction for registry, SSE parsing, and redaction
@@ -37,7 +36,7 @@ The repository is a pnpm workspace monorepo with these active ownership points:
 - `apps/cli`: runtime entrypoint, command surface, observation API host
 - `apps/cli/src/commands/*`: command execution modules
 - `apps/cli/src/server/*`: observation HTTP routes and export serialization
-- `apps/web`: observation UI server and HTML rendering
+- `apps/web`: observation UI server, API client modules, and HTML rendering
 - `packages/config`: config loading, override merging, runtime validation
 - `packages/proxy-engine`: proxying, capture, normalization, privacy-adjacent runtime logic
 - `packages/storage-memory` and `packages/storage-sqlite`: session persistence

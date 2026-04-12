@@ -104,7 +104,7 @@ Milestone 2 split the CLI into:
 
 ### Web
 
-Before additional Web interactions land, split `apps/web/src/index.ts` into:
+Milestone 3 split `apps/web/src/index.ts` into:
 
 - `apps/web/src/server/*`
 - `apps/web/src/ui/layout.ts`

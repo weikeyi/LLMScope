@@ -256,8 +256,31 @@ describe('@llmscope/web observation ui', () => {
     expect(markup).toContain('Stream events');
     expect(markup).toContain('output_text');
     expect(markup).toContain('Apply filters');
+    expect(markup).toContain('Refresh sessions');
+    expect(markup).toContain('Delete session');
+    expect(markup).toContain('Clear all');
+    expect(markup).toContain('Export selected');
+    expect(markup).toContain('This permanently deletes the selected session.');
+    expect(markup).toContain('This permanently deletes every captured session.');
     expect(markup).toContain('Loading observation UI...');
     expect(markup).toContain('sessionId=session-1');
+  });
+
+  it('renders actionable empty states when there are no matching sessions', () => {
+    const markup = renderObservationPage({
+      apiBaseUrl: 'http://127.0.0.1:8788',
+      filters: {
+        search: '/missing',
+        limit: 10,
+      },
+      selectedSessionId: null,
+      sessions: [],
+      selectedSession: null,
+    });
+
+    expect(markup).toContain('No captured sessions match these filters yet.');
+    expect(markup).toContain('Adjust the filters or refresh to look for new traffic.');
+    expect(markup).toContain('Select a session to inspect transport, normalized data, and raw payloads.');
   });
 
   it('reports a missing selected session without failing the page load', async () => {
