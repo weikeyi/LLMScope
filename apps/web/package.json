@@ -19,5 +19,8 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run --passWithNoTests",
     "lint": "eslint src"
+  },
+  "dependencies": {
+    "@llmscope/replay": "workspace:*"
   }
 }

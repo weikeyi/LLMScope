@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 import { describe, expect, it } from 'vitest';
 
+import { genericOpenAiChatCompletionsPlugin } from '@llmscope/provider-generic';
 import type { Session } from '@llmscope/shared-types';
 
 import { NodeProxyEngine, StaticRouteResolver } from '../src/index.js';
@@ -652,6 +653,93 @@ describe('@llmscope/proxy-engine', () => {
     expect(stored?.routing.matchedProvider).toBeUndefined();
     expect(stored?.normalized).toBeUndefined();
     expect(stored?.response?.bodyJson).toEqual({ ok: true });
+
+    await proxy.stop();
+    await upstreamAddress.close();
+  });
+
+  it('captures generic OpenAI-compatible chat routes with a diagnostic warning', async () => {
+    const upstream = createServer(
+      async (request: IncomingMessage, response: ServerResponse) => {
+        const body = await readBody(request);
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            id: 'relay-chatcmpl-test',
+            object: 'chat.completion',
+            model: 'relay-model',
+            choices: [
+              {
+                index: 0,
+                finish_reason: 'stop',
+                message: {
+                  role: 'assistant',
+                  content: 'Hello from relay',
+                },
+              },
+            ],
+            usage: {
+              prompt_tokens: 4,
+              completion_tokens: 3,
+              total_tokens: 7,
+            },
+            echoedMethod: request.method,
+            body: JSON.parse(body),
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const store = new MemorySessionStore();
+    const proxy = new NodeProxyEngine({
+      host: '127.0.0.1',
+      port: 0,
+      routeResolver: new StaticRouteResolver({
+        routeId: 'generic-chat',
+        targetBaseUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+        rewriteHost: true,
+      }),
+      store,
+      providerPlugins: [genericOpenAiChatCompletionsPlugin],
+    });
+
+    await proxy.start();
+    const proxyAddress = proxy.getAddress();
+
+    const response = await fetch(
+      `http://${proxyAddress.host}:${proxyAddress.port}/chat/completions`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'relay-model',
+          stream: false,
+          messages: [{ role: 'user', content: 'hello relay' }],
+        }),
+      },
+    );
+    await response.json();
+    const sessions = await store.listSessions();
+    const stored = await store.getSession(sessions[0]?.id ?? '');
+
+    expect(stored?.routing).toMatchObject({
+      routeId: 'generic-chat',
+      matchedProvider: 'openai-compatible',
+      matchedEndpoint: 'chat.completions',
+    });
+    expect(stored?.normalized).toMatchObject({
+      provider: 'openai-compatible',
+      apiStyle: 'chat.completions',
+      model: 'relay-model',
+    });
+    expect(
+      stored?.warnings?.some((warning) =>
+        warning.includes('Generic OpenAI-compatible normalization applied'),
+      ),
+    ).toBe(true);
 
     await proxy.stop();
     await upstreamAddress.close();

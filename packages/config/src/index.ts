@@ -28,6 +28,8 @@ export interface ProxyConfig {
   host?: string;
   port?: number;
   mode?: ProxyMode;
+  maxConcurrentSessions?: number;
+  requestTimeoutMs?: number;
 }
 
 export interface UiConfig {
@@ -66,6 +68,8 @@ export interface ResolvedProxyConfig {
   host: string;
   port: number;
   mode: ProxyMode;
+  maxConcurrentSessions: number;
+  requestTimeoutMs: number;
 }
 
 export interface ResolvedUiConfig {
@@ -134,6 +138,8 @@ const proxyConfigSchema = z
     host: z.string().min(1).optional(),
     port: z.number().int().min(0).optional(),
     mode: proxyModeSchema.optional(),
+    maxConcurrentSessions: z.number().int().min(1).optional(),
+    requestTimeoutMs: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -186,6 +192,8 @@ export const defaultConfig: ResolvedConfig = {
     host: '127.0.0.1',
     port: 8787,
     mode: 'gateway',
+    maxConcurrentSessions: 100,
+    requestTimeoutMs: 30_000,
   },
   ui: {
     enabled: true,
@@ -226,6 +234,14 @@ const normalizeConfig = (input: unknown): LLMScopeConfig => {
 
     if (parsed.proxy.mode !== undefined) {
       proxy.mode = parsed.proxy.mode;
+    }
+
+    if (parsed.proxy.maxConcurrentSessions !== undefined) {
+      proxy.maxConcurrentSessions = parsed.proxy.maxConcurrentSessions;
+    }
+
+    if (parsed.proxy.requestTimeoutMs !== undefined) {
+      proxy.requestTimeoutMs = parsed.proxy.requestTimeoutMs;
     }
 
     normalized.proxy = proxy;
@@ -456,6 +472,16 @@ const toEnvConfig = (env: NodeJS.ProcessEnv): LLMScopeConfig => {
     0,
   );
   const proxyMode = env.LLMSCOPE_PROXY_MODE;
+  const proxyMaxConcurrentSessions = parseInteger(
+    'LLMSCOPE_PROXY_MAX_CONCURRENT_SESSIONS',
+    env.LLMSCOPE_PROXY_MAX_CONCURRENT_SESSIONS,
+    1,
+  );
+  const proxyRequestTimeoutMs = parseInteger(
+    'LLMSCOPE_PROXY_REQUEST_TIMEOUT_MS',
+    env.LLMSCOPE_PROXY_REQUEST_TIMEOUT_MS,
+    1,
+  );
   const uiEnabled = parseBoolean(
     'LLMSCOPE_UI_ENABLED',
     env.LLMSCOPE_UI_ENABLED,
@@ -477,7 +503,9 @@ const toEnvConfig = (env: NodeJS.ProcessEnv): LLMScopeConfig => {
   if (
     proxyHost !== undefined ||
     proxyPort !== undefined ||
-    proxyMode !== undefined
+    proxyMode !== undefined ||
+    proxyMaxConcurrentSessions !== undefined ||
+    proxyRequestTimeoutMs !== undefined
   ) {
     config.proxy = {};
 
@@ -491,6 +519,14 @@ const toEnvConfig = (env: NodeJS.ProcessEnv): LLMScopeConfig => {
 
     if (proxyMode !== undefined) {
       config.proxy.mode = proxyMode as ProxyMode;
+    }
+
+    if (proxyMaxConcurrentSessions !== undefined) {
+      config.proxy.maxConcurrentSessions = proxyMaxConcurrentSessions;
+    }
+
+    if (proxyRequestTimeoutMs !== undefined) {
+      config.proxy.requestTimeoutMs = proxyRequestTimeoutMs;
     }
   }
 
@@ -652,6 +688,11 @@ export const resolveConfig = (
   const proxyPort = merged.proxy?.port ?? defaultConfig.proxy.port;
   const uiPort = merged.ui?.port ?? defaultConfig.ui.port;
   const uiCorsOrigin = merged.ui?.corsOrigin ?? `http://127.0.0.1:${uiPort}`;
+  const sqliteFilePathInput =
+    merged.storage?.sqlite?.filePath ?? defaultConfig.storage.sqlite.filePath;
+  const sqliteFilePath = isAbsolute(sqliteFilePathInput)
+    ? sqliteFilePathInput
+    : resolvePath(cwd, sqliteFilePathInput);
   const routes = (merged.routes ?? []).map((route) => ({
     ...route,
     targetBaseUrl: normalizeBaseUrl(
@@ -665,6 +706,12 @@ export const resolveConfig = (
       host: merged.proxy?.host ?? defaultConfig.proxy.host,
       port: proxyPort,
       mode: merged.proxy?.mode ?? defaultConfig.proxy.mode,
+      maxConcurrentSessions:
+        merged.proxy?.maxConcurrentSessions ??
+        defaultConfig.proxy.maxConcurrentSessions,
+      requestTimeoutMs:
+        merged.proxy?.requestTimeoutMs ??
+        defaultConfig.proxy.requestTimeoutMs,
     },
     ui: {
       enabled: merged.ui?.enabled ?? defaultConfig.ui.enabled,
@@ -679,9 +726,7 @@ export const resolveConfig = (
           defaultConfig.storage.memory.maxSessions,
       },
       sqlite: {
-        filePath:
-          merged.storage?.sqlite?.filePath ??
-          defaultConfig.storage.sqlite.filePath,
+        filePath: sqliteFilePath,
       },
     },
     privacy: {

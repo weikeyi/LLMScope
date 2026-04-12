@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { Session } from '@llmscope/shared-types';
+import type { Session, WsEvent } from '@llmscope/shared-types';
 
 import {
   createCliRuntime,
@@ -96,6 +96,25 @@ const listen = async (
       });
     },
   };
+};
+
+const waitFor = async (
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> => {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+  }
+
+  throw new Error('Timed out waiting for condition.');
 };
 
 describe('@llmscope/cli parseCliArgs', () => {
@@ -318,6 +337,8 @@ describe('@llmscope/cli doctor', () => {
         host: '127.0.0.1',
         port: 0,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -477,6 +498,57 @@ describe('@llmscope/cli observation api', () => {
         messages: [{ role: 'user', content: 'hi' }],
       });
       expect(detail.response?.bodyJson).toMatchObject({ ok: true });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('allows loopback CORS origins and rejects non-loopback origins by default', async () => {
+    const upstream = createServer(
+      async (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ ok: true }));
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      const loopbackResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        {
+          headers: {
+            origin: 'http://127.0.0.1:3000',
+          },
+        },
+      );
+      const remoteResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions`,
+        {
+          headers: {
+            origin: 'https://evil.example.com',
+          },
+        },
+      );
+
+      expect(loopbackResponse.headers.get('access-control-allow-origin')).toBe(
+        'http://127.0.0.1:3000',
+      );
+      expect(remoteResponse.headers.get('access-control-allow-origin')).toBeNull();
     } finally {
       await runtime.stop();
       await upstreamAddress.close();
@@ -684,23 +756,201 @@ describe('@llmscope/cli observation api', () => {
         status: 'completed',
       });
       expect(missingResponse.status).toBe(404);
-      expect(await missingResponse.json()).toEqual({ error: 'Not found.' });
+      expect(await missingResponse.json()).toEqual({
+        error: 'Not found.',
+        code: 'NOT_FOUND',
+        phase: 'ui',
+        statusCode: 404,
+      });
       expect(invalidLimitResponse.status).toBe(400);
       expect(await invalidLimitResponse.json()).toEqual({
         error: 'Invalid limit query value: abc.',
+        code: 'BAD_REQUEST',
+        phase: 'ui',
+        statusCode: 400,
       });
       expect(invalidStatusResponse.status).toBe(400);
       expect(await invalidStatusResponse.json()).toEqual({
         error: 'Invalid status query value: wat.',
+        code: 'BAD_REQUEST',
+        phase: 'ui',
+        statusCode: 400,
       });
       expect(optionsResponse.status).toBe(204);
       expect(optionsResponse.headers.get('access-control-allow-methods')).toBe(
-        'GET, DELETE, OPTIONS',
+        'GET, POST, DELETE, OPTIONS',
       );
       expect(methodNotAllowedResponse.status).toBe(405);
       expect(await methodNotAllowedResponse.json()).toEqual({
         error: 'Method not allowed.',
+        code: 'METHOD_NOT_ALLOWED',
+        phase: 'ui',
+        statusCode: 405,
       });
+    } finally {
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('broadcasts live websocket events for created, streaming, and completed sessions', async () => {
+    const upstream = createServer(
+      (_request: IncomingMessage, response: ServerResponse) => {
+        response.statusCode = 200;
+        response.setHeader('content-type', 'text/event-stream');
+        response.write('data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n');
+        response.write('data: [DONE]\n\n');
+        response.end();
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    const messages: WsEvent[] = [];
+    const socket = new WebSocket(
+      `ws://${observationAddress.host}:${observationAddress.port}/ws`,
+    );
+
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener('open', () => resolve(), { once: true });
+      socket.addEventListener('error', () => reject(new Error('WebSocket connection failed.')), {
+        once: true,
+      });
+    });
+
+    socket.addEventListener('message', (event) => {
+      messages.push(JSON.parse(String(event.data)) as WsEvent);
+    });
+
+    try {
+      const streamResponse = await fetch(
+        `http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-test',
+            stream: true,
+            messages: [{ role: 'user', content: 'hello live' }],
+          }),
+        },
+      );
+
+      expect(streamResponse.status).toBe(200);
+      await streamResponse.text();
+
+      await waitFor(() => {
+        return (
+          messages.some((event) => event.type === 'session:created') &&
+          messages.some((event) => event.type === 'session:updated') &&
+          messages.some((event) => event.type === 'session:stream-event') &&
+          messages.some((event) => event.type === 'session:completed')
+        );
+      });
+
+      expect(messages[0]?.type).toBe('session:created');
+      expect(messages.some((event) => {
+        return (
+          event.type === 'session:updated' &&
+          event.session.status === 'streaming'
+        );
+      })).toBe(true);
+      expect(messages.some((event) => {
+        return (
+          event.type === 'session:stream-event' &&
+          event.event.eventType === 'delta'
+        );
+      })).toBe(true);
+      expect(messages.some((event) => event.type === 'session:completed')).toBe(
+        true,
+      );
+    } finally {
+      socket.close();
+      await runtime.stop();
+      await upstreamAddress.close();
+    }
+  });
+
+  it('renders replay artifacts for captured sessions without exposing secrets', async () => {
+    const upstream = createServer(
+      async (request: IncomingMessage, response: ServerResponse) => {
+        const body = await readBody(request);
+        response.statusCode = 200;
+        response.setHeader('content-type', 'application/json');
+        response.end(
+          JSON.stringify({
+            id: 'resp-replay',
+            echoed: JSON.parse(body),
+          }),
+        );
+      },
+    );
+    const upstreamAddress = await listen(upstream);
+    const runtime = createCliRuntime({
+      upstreamUrl: `http://${upstreamAddress.host}:${upstreamAddress.port}`,
+      host: '127.0.0.1',
+      port: 0,
+      maxSessions: 10,
+      observationPort: 0,
+    });
+
+    await runtime.start();
+    const proxyAddress = runtime.getProxyAddress();
+    const observationAddress = runtime.getObservationAddress();
+
+    if (observationAddress === null) {
+      throw new Error('Expected observation server address.');
+    }
+
+    try {
+      await fetch(`http://${proxyAddress.host}:${proxyAddress.port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer replay-secret-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-replay',
+          messages: [{ role: 'user', content: 'show replay' }],
+        }),
+      });
+
+      const summariesResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions?limit=1`,
+      );
+      const summaries = (await summariesResponse.json()) as Array<{ id: string }>;
+      const sessionId = summaries[0]?.id;
+
+      if (sessionId === undefined) {
+        throw new Error('Expected one captured session.');
+      }
+
+      const replayResponse = await fetch(
+        `http://${observationAddress.host}:${observationAddress.port}/api/sessions/${sessionId}/replay?format=openai`,
+      );
+      const replayText = await replayResponse.text();
+
+      expect(replayResponse.status).toBe(200);
+      expect(replayResponse.headers.get('content-type')).toContain('text/plain');
+      expect(replayText).toContain('process.env.OPENAI_API_KEY');
+      expect(replayText).not.toContain('replay-secret-token');
+      expect(replayText).toContain("model: 'gpt-replay'");
     } finally {
       await runtime.stop();
       await upstreamAddress.close();

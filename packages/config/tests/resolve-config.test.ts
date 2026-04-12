@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -102,6 +102,8 @@ describe('@llmscope/config resolveConfig', () => {
         host: '0.0.0.0',
         port: 8787,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -114,7 +116,7 @@ describe('@llmscope/config resolveConfig', () => {
           maxSessions: 500,
         },
         sqlite: {
-          filePath: './discovered.db',
+          filePath: resolvePath(cwd, './discovered.db'),
         },
       },
       privacy: {
@@ -164,6 +166,8 @@ describe('@llmscope/config resolveConfig', () => {
         host: '127.0.0.2',
         port: 8787,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -176,7 +180,7 @@ describe('@llmscope/config resolveConfig', () => {
           maxSessions: 500,
         },
         sqlite: {
-          filePath: './data/llmscope.db',
+          filePath: resolvePath(cwd, './data/llmscope.db'),
         },
       },
       privacy: {
@@ -218,6 +222,8 @@ describe('@llmscope/config resolveConfig', () => {
         host: '0.0.0.0',
         port: 7100,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -230,7 +236,7 @@ describe('@llmscope/config resolveConfig', () => {
           maxSessions: 500,
         },
         sqlite: {
-          filePath: './discovered.db',
+          filePath: resolvePath(cwd, './discovered.db'),
         },
       },
       privacy: {
@@ -298,6 +304,8 @@ describe('@llmscope/config resolveConfig', () => {
         host: '127.0.0.1',
         port: 7100,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: false,
@@ -310,7 +318,7 @@ describe('@llmscope/config resolveConfig', () => {
           maxSessions: 321,
         },
         sqlite: {
-          filePath: './from-file.db',
+          filePath: resolvePath(cwd, './from-file.db'),
         },
       },
       privacy: {
@@ -332,6 +340,8 @@ describe('@llmscope/config resolveConfig', () => {
         host: '127.0.0.1',
         port: 8787,
         mode: 'gateway',
+        maxConcurrentSessions: 100,
+        requestTimeoutMs: 30_000,
       },
       ui: {
         enabled: true,
@@ -344,7 +354,7 @@ describe('@llmscope/config resolveConfig', () => {
           maxSessions: 500,
         },
         sqlite: {
-          filePath: './data/llmscope.db',
+          filePath: resolvePath(process.cwd(), './data/llmscope.db'),
         },
       },
       privacy: {
@@ -362,5 +372,33 @@ describe('@llmscope/config resolveConfig', () => {
         },
       }),
     ).toThrow('Invalid boolean value for LLMSCOPE_UI_ENABLED: maybe.');
+  });
+
+  it('resolves sqlite file paths against cwd and carries runtime hardening settings', () => {
+    const cwd = createTempDirectory();
+
+    const config = resolveConfig({
+      cwd,
+      env: {
+        LLMSCOPE_PROXY_MAX_CONCURRENT_SESSIONS: '12',
+        LLMSCOPE_PROXY_REQUEST_TIMEOUT_MS: '4500',
+      },
+      overrides: {
+        storage: {
+          mode: 'sqlite',
+          sqlite: {
+            filePath: './daily-use/llmscope.db',
+          },
+        },
+      },
+    });
+
+    expect(config.proxy).toMatchObject({
+      maxConcurrentSessions: 12,
+      requestTimeoutMs: 4500,
+    });
+    expect(config.storage.sqlite.filePath).toBe(
+      resolvePath(cwd, './daily-use/llmscope.db'),
+    );
   });
 });
