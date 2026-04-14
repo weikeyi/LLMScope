@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build project
+        run: pnpm exec turbo run build --force
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Quick start verification
+        run: |
+          # Test CLI help
+          node apps/cli/dist/index.js --help
+          
+          # Test doctor command with example config
+          node apps/cli/dist/index.js doctor --config ./examples/llmscope.yaml
+
+          # Test config file discovery
+          cp examples/llmscope.yaml ./llmscope.yaml
+          node apps/cli/dist/index.js doctor

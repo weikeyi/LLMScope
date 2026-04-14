@@ -4,7 +4,7 @@ Local-first LLM traffic inspector for config-driven gateway and proxy workflows.
 
 ## Product Snapshot
 
-As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runtime:
+As of 2026-04-13, LLMScope is a runnable local inspector with a stable core runtime and complete release engineering:
 
 - config-driven CLI startup with config file discovery
 - CLI operator commands: `start`, `doctor`, `list`, `show`, `clear`, `export`
@@ -15,10 +15,12 @@ As of 2026-04-12, LLMScope is a runnable local inspector with a stable core runt
 - shared export, diff, and replay artifact generation in `packages/replay`
 - extracted runtime packages for provider registry, SSE parsing, and redaction
 - privacy modes and SQLite-backed persistence
+- CI/CD workflow with GitHub Actions
+- Playwright end-to-end testing
+- Changesets version management
+- OSS release documentation and policies
 
-The complete product contract is broader than the current implementation. Still planned:
-
-- runtime hardening, release engineering, and OSS packaging
+The complete product contract is now fully implemented. MITM interception and local CA management remain deferred to the final optional milestone.
 
 MITM interception and local CA management are explicitly deferred to the final optional milestone. They are not part of the near-term product completion path.
 
@@ -132,7 +134,6 @@ pnpm exec llmscope-web --api-base-url http://127.0.0.1:8788 --port 3000
 Then open `http://127.0.0.1:3000`.
 
 ## Development
-## Development
 
 From the repository root:
 
@@ -141,6 +142,8 @@ pnpm build
 pnpm typecheck
 pnpm test
 pnpm lint
+# Run Playwright end-to-end tests
+pnpm exec playwright test
 ```
 
 Target a single package:
